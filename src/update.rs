@@ -26,6 +26,14 @@ const STABLE_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/latest.json";
 const PREVIEW_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/preview.json";
 const HOMEBREW_FORMULA_API_URL: &str = "https://formulae.brew.sh/api/formula/herdr.json";
 const HERDR_UPDATE_COMMAND: &str = "herdr update";
+const FORK_UPDATE_DISABLED: &str =
+    "self-update is disabled for fork builds; rebuild with fork/build.sh (see fork/README.md)";
+
+/// Fork builds are installed from a local checkout; the hosted manifest must
+/// never replace them.
+fn fork_update_guard(channel: &str) -> Option<&'static str> {
+    (channel == "fork").then_some(FORK_UPDATE_DISABLED)
+}
 const HOMEBREW_UPDATE_COMMAND: &str = "brew update && brew upgrade herdr";
 const MISE_UPDATE_COMMAND: &str = "mise upgrade herdr";
 const NIX_UPDATE_COMMAND: &str = "update through Nix";
@@ -2111,6 +2119,9 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
 
 /// Manual self-update command (`herdr update`).
 pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+    if let Some(reason) = fork_update_guard(crate::build_info::channel()) {
+        return Err(reason.into());
+    }
     let channel = UpdateChannel::configured();
 
     if is_homebrew_managed_install() {
@@ -2244,6 +2255,10 @@ fn print_outdated_integration_notice_with_updated_binary(updated_exe: &Path) {
 /// Runs in a background thread at startup.
 pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
     crate::logging::update_check_started();
+    if let Some(reason) = fork_update_guard(crate::build_info::channel()) {
+        tracing::info!(reason, "skipping background update check");
+        return;
+    }
     if let Ok(version) = env::var(FAKE_UPDATE_VERSION_ENV) {
         let version = version.trim();
         if !version.is_empty() {
@@ -2400,6 +2415,13 @@ fn platform_target() -> (&'static str, &'static str) {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fork_channel_disables_update() {
+        assert!(fork_update_guard("fork").is_some());
+        assert!(fork_update_guard("stable").is_none());
+        assert!(fork_update_guard("preview").is_none());
+    }
     use std::os::unix::net::UnixListener;
     use std::sync::{
         atomic::{AtomicBool, Ordering},

@@ -107,6 +107,7 @@ fn grouped_worktrees_render_parent_branch_and_indented_child() {
         label: "repo-feature".into(),
         custom_label: false,
         branch: Some("worktree/feature".into()),
+        worktree_name: None,
         git_ahead_behind: None,
         tokens: Vec::new(),
         worktree: Some(ClientShellWorktree {
@@ -1279,4 +1280,88 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
     assert!(repaint);
     assert!(state.visible_notification.is_none());
     assert_eq!(state.pending_notifications.len(), 1);
+}
+
+#[test]
+fn clicking_detail_rows_folds_workspace_and_space_key_unfolds() {
+    use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.spaces.rows = vec![
+        vec![crate::config::SpaceSidebarToken::Workspace],
+        vec![crate::config::SpaceSidebarToken::Worktree],
+        vec![crate::config::SpaceSidebarToken::Branch],
+    ];
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    snapshot.workspaces[0].label = "prompts-box".into();
+    snapshot.workspaces[0].branch = Some("chore/x".into());
+    snapshot.workspaces[0].worktree_name = Some("wt-fold".into());
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 20).expect("composed frame");
+    let text = frame_text(&frame);
+    assert!(text.contains("wt-fold"));
+    assert!(text.contains("chore/x"));
+    let hit_rect = state.hits.workspaces[0].rect;
+    assert_eq!(hit_rect.height, 3);
+    let detail = state.hits.workspaces[0]
+        .detail_rect
+        .expect("detail rows are a click target");
+
+    let click = |column: u16, row: u16| {
+        RawInputEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    };
+    let outcome = state.handle_raw_events(vec![click(detail.x + 1, detail.y)]);
+    assert!(
+        outcome.actions.is_empty(),
+        "folding must not focus the workspace"
+    );
+    assert!(state.folded_workspaces.contains("ws_1"));
+    let folded = state.compose(106, 20).expect("folded frame");
+    let text = frame_text(&folded);
+    assert!(!text.contains("wt-fold"));
+    assert!(!text.contains("chore/x"));
+    assert!(text.contains("\u{2026}"));
+    assert_eq!(state.hits.workspaces[0].rect.height, 1);
+    let unfold = state.hits.workspaces[0]
+        .fold_toggle
+        .expect("fold glyph is a click target");
+    state.handle_raw_events(vec![click(unfold.x, unfold.y)]);
+    assert!(!state.folded_workspaces.contains("ws_1"));
+
+    state.mode = ClientShellMode::Navigate;
+    state.navigate_workspace_id = Some("ws_1".into());
+    state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+        KeyCode::Char(' '),
+        KeyModifiers::empty(),
+    ))]);
+    assert!(state.folded_workspaces.contains("ws_1"));
+    assert_eq!(
+        state.mode,
+        ClientShellMode::Navigate,
+        "space keeps navigate mode"
+    );
+    state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+        KeyCode::Char(' '),
+        KeyModifiers::empty(),
+    ))]);
+    assert!(!state.folded_workspaces.contains("ws_1"));
+}
+
+fn frame_text(frame: &crate::protocol::FrameData) -> String {
+    frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

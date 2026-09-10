@@ -10,6 +10,7 @@ use crate::workspace::{GitStatusCacheEntry, GitStatusRefreshDemand, WorkspaceGit
 struct WorkspaceGitRefreshItem {
     workspace_id: String,
     resolved_identity_cwd: PathBuf,
+    status_cwd: PathBuf,
     cache_key_hint: Option<PathBuf>,
 }
 
@@ -17,6 +18,7 @@ struct WorkspaceGitRefreshItem {
 struct WorkspaceGitRefreshTarget {
     workspace_id: String,
     resolved_identity_cwd: PathBuf,
+    status_cwd: PathBuf,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,7 +105,8 @@ impl App {
         let mut demand = GitStatusRefreshDemand::default();
         for token in self.state.sidebar_spaces.rows.iter().flatten() {
             match token.parts().0 {
-                crate::config::SpaceSidebarToken::Branch => demand.branch = true,
+                crate::config::SpaceSidebarToken::Branch
+                | crate::config::SpaceSidebarToken::Worktree => demand.branch = true,
                 crate::config::SpaceSidebarToken::GitStatus => demand.ahead_behind = true,
                 _ => {}
             }
@@ -121,11 +124,17 @@ impl App {
             .filter_map(|ws| {
                 let cwd =
                     ws.resolved_identity_cwd_from(&self.state.terminals, &self.terminal_runtimes)?;
-                let cache_key_hint = (!refresh_repo_discovery && ws.cached_identity_cwd == cwd)
+                let status_cwd = ws
+                    .resolved_status_cwd_from(&self.state.terminals, &self.terminal_runtimes)
+                    .unwrap_or_else(|| cwd.clone());
+                let cache_key_hint = (!refresh_repo_discovery
+                    && ws.cached_identity_cwd == cwd
+                    && ws.cached_status_cwd == status_cwd)
                     .then(|| ws.cached_git_status_key.clone());
                 Some(WorkspaceGitRefreshItem {
                     workspace_id: ws.id.clone(),
                     resolved_identity_cwd: cwd,
+                    status_cwd,
                     cache_key_hint,
                 })
             })
@@ -143,12 +152,13 @@ fn deduplicate_git_refresh_items(
     for item in items {
         let reconcile = item.cache_key_hint.is_none();
         let cache_key = item.cache_key_hint.unwrap_or_else(|| {
-            crate::workspace::git_status_cache_key(&item.resolved_identity_cwd)
-                .unwrap_or_else(|| item.resolved_identity_cwd.clone())
+            crate::workspace::git_status_cache_key(&item.status_cwd)
+                .unwrap_or_else(|| item.status_cwd.clone())
         });
         let target = WorkspaceGitRefreshTarget {
             workspace_id: item.workspace_id,
             resolved_identity_cwd: item.resolved_identity_cwd,
+            status_cwd: item.status_cwd,
         };
         if let Some(&index) = indexes.get(&cache_key) {
             jobs[index].cached = jobs[index].cached.take().filter(|_| !reconcile);
@@ -189,6 +199,7 @@ fn refresh_workspace_git_statuses_with_cache_and_demand(
             snapshot.clone().into_workspace_status(
                 target.workspace_id,
                 target.resolved_identity_cwd,
+                target.status_cwd,
                 job.cache_key.clone(),
                 demand,
             )
@@ -226,11 +237,13 @@ mod tests {
                 WorkspaceGitRefreshItem {
                     workspace_id: "one".into(),
                     resolved_identity_cwd: nested.clone(),
+                    status_cwd: nested.clone(),
                     cache_key_hint: None,
                 },
                 WorkspaceGitRefreshItem {
                     workspace_id: "two".into(),
                     resolved_identity_cwd: other.clone(),
+                    status_cwd: other.clone(),
                     cache_key_hint: None,
                 },
             ],
@@ -276,6 +289,7 @@ mod tests {
             .map(|name| WorkspaceGitRefreshItem {
                 workspace_id: name.into(),
                 resolved_identity_cwd: cache_key.join(name),
+                status_cwd: cache_key.join(name),
                 cache_key_hint: Some(cache_key.clone()),
             })
             .collect();
@@ -317,7 +331,8 @@ mod tests {
         let cache_key = PathBuf::from("/repo");
         let mut ws = Workspace::test_new("test");
         ws.identity_cwd = cwd.clone();
-        ws.cached_identity_cwd = cwd;
+        ws.cached_identity_cwd = cwd.clone();
+        ws.cached_status_cwd = cwd;
         ws.cached_git_status_key = cache_key.clone();
         ws.tabs.clear();
         app.state.workspaces.push(ws);
@@ -334,7 +349,8 @@ mod tests {
         let cwd = PathBuf::from("/repo/deep/nested");
         let mut ws = Workspace::test_new("test");
         ws.identity_cwd = cwd.clone();
-        ws.cached_identity_cwd = cwd;
+        ws.cached_identity_cwd = cwd.clone();
+        ws.cached_status_cwd = cwd;
         ws.cached_git_status_key = PathBuf::from("/repo");
         ws.tabs.clear();
         app.state.workspaces.push(ws);
@@ -534,5 +550,62 @@ mod tests {
             tokio::sync::mpsc::unbounded_channel().1,
             crate::api::EventHub::default(),
         )
+    }
+    #[test]
+    fn status_cwd_in_linked_worktree_keeps_label_from_identity_cwd() {
+        let (base, repo, checkout) =
+            crate::workspace::git_test_support::create_repo_with_linked_worktree(
+                "status-cwd-linked",
+            );
+        let items = vec![WorkspaceGitRefreshItem {
+            workspace_id: "ws".into(),
+            resolved_identity_cwd: repo.clone(),
+            status_cwd: checkout.clone(),
+            cache_key_hint: None,
+        }];
+        let output = refresh_workspace_git_statuses_with_cache_and_demand(
+            items,
+            &HashMap::new(),
+            GitStatusRefreshDemand {
+                branch: true,
+                ahead_behind: false,
+            },
+        );
+        let result = &output.results[0];
+        assert_eq!(
+            result.auto_label,
+            repo.file_name().unwrap().to_str().unwrap()
+        );
+        assert_eq!(result.status_cwd, checkout);
+        assert_eq!(
+            result.foreground_worktree.as_deref(),
+            checkout.file_name().unwrap().to_str()
+        );
+        assert_eq!(result.branch.as_deref(), Some("testr56"));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn status_cwd_equal_to_identity_cwd_has_no_foreground_worktree_on_primary() {
+        let (base, repo, _checkout) =
+            crate::workspace::git_test_support::create_repo_with_linked_worktree(
+                "status-cwd-primary",
+            );
+        let items = vec![WorkspaceGitRefreshItem {
+            workspace_id: "ws".into(),
+            resolved_identity_cwd: repo.clone(),
+            status_cwd: repo.clone(),
+            cache_key_hint: None,
+        }];
+        let output = refresh_workspace_git_statuses_with_cache_and_demand(
+            items,
+            &HashMap::new(),
+            GitStatusRefreshDemand {
+                branch: true,
+                ahead_behind: false,
+            },
+        );
+        assert_eq!(output.results[0].foreground_worktree, None);
+        let _ = std::fs::remove_dir_all(base);
     }
 }

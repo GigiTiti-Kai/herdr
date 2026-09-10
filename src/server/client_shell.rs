@@ -62,6 +62,7 @@ pub(super) fn snapshot(
                 label: workspace.label,
                 custom_label: state.custom_name.is_some(),
                 branch: state.branch(),
+                worktree_name: state.foreground_worktree().map(str::to_string),
                 git_ahead_behind: state.git_ahead_behind(),
                 tokens,
                 worktree: workspace

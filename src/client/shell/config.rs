@@ -32,6 +32,8 @@ impl ClientShellState {
         };
         let mut collapsed_groups = self.collapsed_groups.iter().cloned().collect::<Vec<_>>();
         collapsed_groups.sort();
+        let mut folded_workspaces = self.folded_workspaces.iter().cloned().collect::<Vec<_>>();
+        folded_workspaces.sort();
         let preferences = preferences::ClientChromePreferences {
             sidebar_width: self.sidebar_width_manual.then_some(self.sidebar_width),
             sidebar_section_split: self
@@ -44,6 +46,7 @@ impl ClientShellState {
                 .agent_panel_sort_manual
                 .then_some(self.config.agent_panel_sort),
             collapsed_groups,
+            folded_workspaces,
         };
         if let Err(error) = preferences::store(path, preferences) {
             self.endpoint_error = Some(error);

@@ -1984,6 +1984,26 @@ impl ClientShellState {
                         }
                     }
                 }
+                let fold_target = self
+                    .hits
+                    .workspaces
+                    .iter()
+                    .find(|hit| {
+                        hit.fold_toggle
+                            .is_some_and(|rect| super::contains(rect, point))
+                            || hit
+                                .detail_rect
+                                .is_some_and(|rect| super::contains(rect, point))
+                    })
+                    .map(|hit| hit.workspace_id.clone());
+                if let Some(workspace_id) = fold_target {
+                    if !self.folded_workspaces.remove(&workspace_id) {
+                        self.folded_workspaces.insert(workspace_id);
+                    }
+                    outcome.repaint = true;
+                    self.persist_chrome_preferences(outcome);
+                    return;
+                }
                 let workspace_press = self
                     .hits
                     .workspaces

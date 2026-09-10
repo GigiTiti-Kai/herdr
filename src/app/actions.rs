@@ -1546,9 +1546,20 @@ impl AppState {
                 continue;
             }
 
+            if self.workspaces[ws_idx]
+                .resolved_status_cwd_from(&self.terminals, terminal_runtimes)
+                .as_ref()
+                != Some(&result.status_cwd)
+            {
+                continue;
+            }
+
             let ws = &mut self.workspaces[ws_idx];
             if ws.cached_identity_cwd != result.resolved_identity_cwd {
                 ws.cached_identity_cwd = result.resolved_identity_cwd;
+            }
+            if ws.cached_status_cwd != result.status_cwd {
+                ws.cached_status_cwd = result.status_cwd;
             }
             if ws.cached_auto_label != result.auto_label {
                 ws.cached_auto_label = result.auto_label;
@@ -1567,6 +1578,10 @@ impl AppState {
             }
             if ws.cached_git_space != result.space {
                 ws.cached_git_space = result.space;
+                changed = true;
+            }
+            if result.demand.branch && ws.cached_foreground_worktree != result.foreground_worktree {
+                ws.cached_foreground_worktree = result.foreground_worktree;
                 changed = true;
             }
         }
@@ -2501,12 +2516,14 @@ mod tests {
             vec![WorkspaceGitStatus {
                 workspace_id: first_id,
                 resolved_identity_cwd: first_cwd.clone(),
+                status_cwd: first_cwd.clone(),
                 status_cache_key: first_cwd,
                 demand: crate::workspace::GitStatusRefreshDemand::ALL,
                 auto_label: "one".into(),
                 branch: Some("main".into()),
                 ahead_behind: Some((2, 1)),
                 space: None,
+                foreground_worktree: None,
             }],
         );
 
@@ -2530,12 +2547,14 @@ mod tests {
             vec![WorkspaceGitStatus {
                 workspace_id,
                 resolved_identity_cwd: std::path::PathBuf::from("/definitely/not/current"),
+                status_cwd: std::path::PathBuf::from("/definitely/not/current").clone(),
                 status_cache_key: std::path::PathBuf::from("/definitely/not/current"),
                 demand: crate::workspace::GitStatusRefreshDemand::ALL,
                 auto_label: "stale".into(),
                 branch: Some("main".into()),
                 ahead_behind: Some((0, 1)),
                 space: None,
+                foreground_worktree: None,
             }],
         );
 
@@ -2558,6 +2577,7 @@ mod tests {
             vec![WorkspaceGitStatus {
                 workspace_id,
                 resolved_identity_cwd: cwd.clone(),
+                status_cwd: cwd.clone(),
                 status_cache_key: cwd,
                 demand: crate::workspace::GitStatusRefreshDemand {
                     branch: false,
@@ -2567,6 +2587,7 @@ mod tests {
                 branch: Some("new".into()),
                 ahead_behind: None,
                 space: None,
+                foreground_worktree: None,
             }],
         );
 
@@ -2588,12 +2609,14 @@ mod tests {
             vec![WorkspaceGitStatus {
                 workspace_id,
                 resolved_identity_cwd: cwd.clone(),
+                status_cwd: cwd.clone(),
                 status_cache_key: cwd,
                 demand: crate::workspace::GitStatusRefreshDemand::ALL,
                 auto_label: "one".into(),
                 branch: None,
                 ahead_behind: None,
                 space: None,
+                foreground_worktree: None,
             }],
         );
 
@@ -2616,6 +2639,7 @@ mod tests {
             vec![WorkspaceGitStatus {
                 workspace_id,
                 resolved_identity_cwd: cwd.clone(),
+                status_cwd: cwd.clone(),
                 status_cache_key: cwd,
                 demand: crate::workspace::GitStatusRefreshDemand::ALL,
                 auto_label: "other".into(),
@@ -2628,6 +2652,7 @@ mod tests {
                     repo_root: "/other/repo".into(),
                     is_linked_worktree: false,
                 }),
+                foreground_worktree: None,
             }],
         );
 

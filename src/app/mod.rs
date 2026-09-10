@@ -1112,12 +1112,14 @@ mod tests {
             results: vec![crate::workspace::WorkspaceGitStatus {
                 workspace_id,
                 resolved_identity_cwd: resolved_identity_cwd.clone(),
+                status_cwd: resolved_identity_cwd.clone(),
                 status_cache_key: resolved_identity_cwd,
                 demand: crate::workspace::GitStatusRefreshDemand::ALL,
                 auto_label: "one".into(),
                 branch: Some("render-dirty-test".into()),
                 ahead_behind: Some((1, 0)),
                 space: None,
+                foreground_worktree: None,
             }],
             cache_updates: Vec::new(),
         });

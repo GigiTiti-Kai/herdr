@@ -288,6 +288,10 @@ pub(super) struct WorkspaceHit {
     pub(super) workspace_id: String,
     pub(super) indented: bool,
     pub(super) group_toggle: Option<(Rect, String)>,
+    /// Rows below the first one; a left click here folds the entry.
+    pub(super) detail_rect: Option<Rect>,
+    /// The `…` glyph shown while folded; a left click here unfolds the entry.
+    pub(super) fold_toggle: Option<Rect>,
 }
 
 #[derive(Debug)]
@@ -911,6 +915,7 @@ pub(crate) struct ClientShellState {
     pub(super) workspace_press: Option<ClientWorkspacePress>,
     pub(super) tab_press: Option<ClientTabPress>,
     pub(super) collapsed_groups: HashSet<String>,
+    pub(super) folded_workspaces: HashSet<String>,
     pub(super) workspace_scroll: usize,
     pub(super) agent_scroll: usize,
     pub(super) tab_scroll: usize,
@@ -1054,6 +1059,7 @@ impl ClientShellState {
             workspace_press: None,
             tab_press: None,
             collapsed_groups: preferences.collapsed_groups.into_iter().collect(),
+            folded_workspaces: preferences.folded_workspaces.into_iter().collect(),
             workspace_scroll: 0,
             agent_scroll: 0,
             tab_scroll: 0,

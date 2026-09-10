@@ -3541,12 +3541,14 @@ fn unchanged_git_refresh_does_not_request_headless_render() {
         results: vec![crate::workspace::WorkspaceGitStatus {
             workspace_id,
             resolved_identity_cwd: cwd.clone(),
+            status_cwd: cwd.clone(),
             status_cache_key: cwd,
             demand: crate::workspace::GitStatusRefreshDemand::ALL,
             auto_label: "cached".into(),
             branch: None,
             ahead_behind: None,
             space: None,
+            foreground_worktree: None,
         }],
         cache_updates: Vec::new(),
     });
@@ -3567,12 +3569,14 @@ fn changed_git_refresh_requests_headless_render() {
         results: vec![crate::workspace::WorkspaceGitStatus {
             workspace_id,
             resolved_identity_cwd: cwd.clone(),
+            status_cwd: cwd.clone(),
             status_cache_key: cwd,
             demand: crate::workspace::GitStatusRefreshDemand::ALL,
             auto_label: "one".into(),
             branch: Some("changed".into()),
             ahead_behind: None,
             space: None,
+            foreground_worktree: None,
         }],
         cache_updates: Vec::new(),
     });

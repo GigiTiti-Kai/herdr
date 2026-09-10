@@ -155,7 +155,7 @@ pub(crate) fn space_rows(
                         }
                         SpaceSidebarToken::Worktree if !context.suppress_git_details => context
                             .worktree
-                            .map(|name| ResolvedTokenKind::Worktree(name.to_string())),
+                            .map(|name| ResolvedTokenKind::Worktree(format!("wt:{name}"))),
                         SpaceSidebarToken::Worktree => None,
                         SpaceSidebarToken::Branch if !context.suppress_git_details => context
                             .branch
@@ -509,7 +509,7 @@ rows = [[{ token = "$load", rules = [{ lt = 50, dim = true }] }]]
         assert_eq!(with.len(), 3);
         assert!(matches!(
             &with[1][0].kind,
-            ResolvedTokenKind::Worktree(name) if name == "glittery-sleeping-hopcroft"
+            ResolvedTokenKind::Worktree(name) if name == "wt:glittery-sleeping-hopcroft"
         ));
         let without = space_rows(
             &config,

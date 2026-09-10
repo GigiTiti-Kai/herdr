@@ -7,6 +7,7 @@
 - Space entries can be folded to their first row by clicking the detail rows or pressing Space in navigate mode; the state persists per client.
 
 ### Changed
+- The `branch` space token is hidden while it merely repeats the `worktree` row (`worktree-<checkout>`, the `claude -w` naming); any other branch still shows.
 - A workspace whose shell sits inside a linked worktree of a `.git` repository is now labeled with the repository name; the checkout shows up as the `worktree` token. Bare-repository layouts keep their checkout names.
 
 ### Fixed

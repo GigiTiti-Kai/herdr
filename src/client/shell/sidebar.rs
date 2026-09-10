@@ -648,7 +648,14 @@ pub(in crate::client::shell) fn workspace_rows(
                 .worktree_name
                 .as_deref()
                 .filter(|name| *name != label),
-            branch: workspace.branch.as_deref(),
+            // `claude -w` names its branch `worktree-<checkout>`, which repeats
+            // the worktree row verbatim; hide that branch, keep any other.
+            branch: workspace.branch.as_deref().filter(|branch| {
+                workspace
+                    .worktree_name
+                    .as_deref()
+                    .is_none_or(|checkout| *branch != format!("worktree-{checkout}"))
+            }),
             state_text: status_text(status),
             ahead_behind: workspace.git_ahead_behind,
             tokens: &token_values,

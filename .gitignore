@@ -1,4 +1,6 @@
 /target
+# Claude Code auto worktrees
+.claude/worktrees/
 node_modules/
 /vendor/libghostty-vt/zig-pkg/
 __pycache__/

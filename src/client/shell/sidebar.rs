@@ -642,7 +642,12 @@ pub(in crate::client::shell) fn workspace_rows(
         config,
         crate::ui::SpaceTokenContext {
             workspace: label,
-            worktree: workspace.worktree_name.as_deref(),
+            // A lone linked-worktree space already uses the checkout name as its
+            // label; do not print the same name twice.
+            worktree: workspace
+                .worktree_name
+                .as_deref()
+                .filter(|name| *name != label),
             branch: workspace.branch.as_deref(),
             state_text: status_text(status),
             ahead_behind: workspace.git_ahead_behind,

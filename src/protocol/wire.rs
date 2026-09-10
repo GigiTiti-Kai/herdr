@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Current protocol version. Bumped when wire format changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 23;
 
 /// Maximum allowed frame payload size (2 MB). Frames larger than this are
 /// rejected to prevent denial-of-service via oversized length prefixes.
@@ -1018,7 +1018,9 @@ pub struct ClientShellWorkspace {
     pub custom_label: bool,
     pub branch: Option<String>,
     /// Checkout directory name when the workspace's foreground process runs
-    /// inside a linked Git worktree. Optional so older peers can omit it.
+    /// inside a linked Git worktree. `serde(default)` only covers the JSON
+    /// endpoint path; the bincode socket path is positional, hence the
+    /// `PROTOCOL_VERSION` bump that shipped with this field.
     #[serde(default)]
     pub worktree_name: Option<String>,
     pub git_ahead_behind: Option<(usize, usize)>,

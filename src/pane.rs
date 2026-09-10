@@ -322,6 +322,82 @@ fn usable_process_cwd(pid: u32) -> Option<std::path::PathBuf> {
     absolute_process_cwd(pid).filter(|cwd| cwd.is_dir())
 }
 
+/// Resolve the process whose cwd represents the foreground job.
+///
+/// The group leader is authoritative, except when it is a shell that only
+/// wraps a single child in the same group (`( ... claude )` launchers,
+/// `bash -c 'exec-less wrapper'`): then the wrapped program is the job. Only
+/// the cheap one-process lookup runs unless the leader is such a shell.
+#[cfg(unix)]
+fn foreground_effective_pid(shell_pid: u32, leader_pid: u32) -> u32 {
+    let leader_is_shell = crate::detect::foreground_group_leader_job(leader_pid)
+        .and_then(|job| job.processes.into_iter().next())
+        .is_some_and(|leader| is_wrapper_shell_name(&leader.name));
+    if !leader_is_shell {
+        return leader_pid;
+    }
+    let Some(job) = crate::detect::foreground_job(shell_pid) else {
+        return leader_pid;
+    };
+    let members = job
+        .processes
+        .into_iter()
+        .map(|process| WrapperCandidate {
+            pid: process.pid,
+            parent: crate::platform::process_parent_id(process.pid),
+            is_agent: crate::detect::is_agent_process(&process),
+            name: process.name,
+        })
+        .collect::<Vec<_>>();
+    unwrap_shell_wrappers(leader_pid, &members)
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WrapperCandidate {
+    pid: u32,
+    parent: Option<u32>,
+    is_agent: bool,
+    name: String,
+}
+
+#[cfg(unix)]
+fn is_wrapper_shell_name(name: &str) -> bool {
+    let base = name.rsplit('/').next().unwrap_or(name).to_ascii_lowercase();
+    matches!(
+        base.as_str(),
+        "sh" | "bash" | "zsh" | "dash" | "fish" | "ksh" | "ash"
+    )
+}
+
+/// Walk from the leader through shells that have exactly one child in the
+/// job. The walk only counts when it lands on a recognized agent: a shell
+/// leader whose lone child is a background helper (`(cd x && sleep) &`)
+/// keeps the leader, as issue #3270 requires.
+#[cfg(unix)]
+fn unwrap_shell_wrappers(leader_pid: u32, members: &[WrapperCandidate]) -> u32 {
+    let mut current = leader_pid;
+    for _ in 0..8 {
+        let Some(process) = members.iter().find(|member| member.pid == current) else {
+            return leader_pid;
+        };
+        if process.is_agent {
+            return current;
+        }
+        if !is_wrapper_shell_name(&process.name) {
+            return leader_pid;
+        }
+        let mut children = members
+            .iter()
+            .filter(|member| member.parent == Some(current));
+        let (Some(only_child), None) = (children.next(), children.next()) else {
+            return leader_pid;
+        };
+        current = only_child.pid;
+    }
+    leader_pid
+}
+
 #[cfg(unix)]
 fn foreground_member_cwd_different_from_shell(
     shell_pid: u32,
@@ -3271,9 +3347,11 @@ impl PaneRuntime {
     pub fn follow_cwd(&self) -> Option<std::path::PathBuf> {
         #[cfg(unix)]
         {
+            let pid = self.child_pid.load(Ordering::Acquire);
             let leader_cwd = self
                 .io
                 .foreground_process_group_id()
+                .map(|leader| foreground_effective_pid(pid, leader))
                 .and_then(usable_process_cwd);
             leader_cwd.or_else(|| self.cwd())
         }
@@ -3294,12 +3372,16 @@ impl PaneRuntime {
                 .io
                 .foreground_process_group_id()
                 .or_else(|| crate::platform::foreground_process_group_id(pid));
-            let leader_cwd = foreground_pgid.and_then(absolute_process_cwd);
+            let leader_cwd = foreground_pgid
+                .map(|leader| foreground_effective_pid(pid, leader))
+                .and_then(absolute_process_cwd);
 
             // The group leader's cwd is authoritative (issue #3270): a helper
             // process that chdirs elsewhere inside the same foreground group
-            // must not override it. Scan other members only when the leader's
-            // cwd cannot be read at all.
+            // must not override it. The one exception is a shell wrapper that
+            // merely spawned the real foreground program (see
+            // `unwrap_shell_wrappers`). Scan other members only when the
+            // leader's cwd cannot be read at all.
             leader_cwd
                 .or_else(|| foreground_member_cwd_different_from_shell(pid, shell_cwd.as_ref()))
         }
@@ -3399,6 +3481,77 @@ impl PaneRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    fn member(pid: u32, parent: Option<u32>, name: &str) -> WrapperCandidate {
+        WrapperCandidate {
+            pid,
+            parent,
+            is_agent: matches!(name, "claude" | "codex"),
+            name: name.to_string(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unwrap_shell_wrappers_follows_subshell_to_its_single_child() {
+        // `ccy` runs `( ... claude )`: bash subshell leads the group, claude is
+        // its only child, claude's own helpers hang off claude.
+        let members = [
+            member(100, Some(1), "bash"),
+            member(101, Some(100), "claude"),
+            member(102, Some(101), "MainThread"),
+            member(103, Some(101), "node_repl.exe"),
+        ];
+        assert_eq!(unwrap_shell_wrappers(100, &members), 101);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unwrap_shell_wrappers_keeps_non_shell_leader() {
+        // Issue #3270: a helper that chdirs inside claude's group must not win.
+        let members = [
+            member(200, Some(1), "claude"),
+            member(201, Some(200), "bash"),
+        ];
+        assert_eq!(unwrap_shell_wrappers(200, &members), 200);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unwrap_shell_wrappers_stops_at_shell_with_several_children() {
+        let members = [
+            member(300, Some(1), "bash"),
+            member(301, Some(300), "cargo"),
+            member(302, Some(300), "tee"),
+        ];
+        assert_eq!(unwrap_shell_wrappers(300, &members), 300);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unwrap_shell_wrappers_keeps_shell_leader_whose_child_is_not_an_agent() {
+        // tests/api_ping.rs new_terminal_cwd_follow_ignores_nonleader_group_member_cwd:
+        // `sh -c '(cd elsewhere && sleep) & wait'` — the helper chain must not win.
+        let members = [
+            member(500, Some(1), "sh"),
+            member(501, Some(500), "sh"),
+            member(502, Some(501), "sleep"),
+        ];
+        assert_eq!(unwrap_shell_wrappers(500, &members), 500);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unwrap_shell_wrappers_walks_nested_shells_and_unknown_leader() {
+        let members = [
+            member(400, Some(1), "/bin/bash"),
+            member(401, Some(400), "sh"),
+            member(402, Some(401), "codex"),
+        ];
+        assert_eq!(unwrap_shell_wrappers(400, &members), 402);
+        assert_eq!(unwrap_shell_wrappers(999, &members), 999);
+    }
 
     #[test]
     fn pane_launch_env_removes_outer_codex_thread_id() {

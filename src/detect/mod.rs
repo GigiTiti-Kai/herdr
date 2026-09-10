@@ -240,6 +240,12 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
     parse_agent_label(process_name)
 }
 
+/// True when the process is a recognized coding agent (after runtime/shell
+/// wrapper normalization).
+pub fn is_agent_process(process: &crate::platform::ForegroundProcess) -> bool {
+    identify_agent(&normalized_process_name(process)).is_some()
+}
+
 pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Agent, String)> {
     if let Some(process) = job
         .processes

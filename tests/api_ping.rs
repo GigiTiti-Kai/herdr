@@ -2613,3 +2613,95 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
 
     cleanup_spawned_herdr(child, base);
 }
+
+#[test]
+fn foreground_cwd_unwraps_shell_wrapper_around_agent() {
+    // `ccy`-style launchers run `( ... claude )`: the bash subshell leads the
+    // foreground group while the agent is its only child and the one that
+    // chdir'd into the worktree. The agent's cwd must win over the wrapper's.
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let worktree = base.join("worktree-checkout");
+    let fake_agent = base.join("claude");
+    let marker = base.join("agent-ready");
+    let pid_file = base.join("agent.pid");
+    fs::create_dir_all(&worktree).unwrap();
+    fs::copy("/bin/sleep", &fake_agent).unwrap();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+
+    let child = spawn_herdr_with_shell(&config_home, &runtime_dir, &socket_path, "/bin/bash");
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+
+    let created = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"wrap_ws","method":"workspace.create","params":{{"cwd":"{}","focus":true}}}}"#,
+            base.display()
+        ),
+    );
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let command = format!(
+        "/bin/bash -c '( cd {} && printf %s $BASHPID > {} && touch {} && exec {} 30 ); :'",
+        worktree.display(),
+        pid_file.display(),
+        marker.display(),
+        fake_agent.display()
+    );
+    let send_text = send_request(
+        &socket_path,
+        &serde_json::json!({
+            "id": "wrap_send",
+            "method": "pane.send_text",
+            "params": {
+                "pane_id": pane_id,
+                "text": command,
+            },
+        })
+        .to_string(),
+    );
+    assert_eq!(send_text["result"]["type"], "ok");
+    let send_enter = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"wrap_enter","method":"pane.send_keys","params":{{"pane_id":"{}","keys":["Enter"]}}}}"#,
+            pane_id
+        ),
+    );
+    assert_eq!(send_enter["result"]["type"], "ok");
+    wait_for_path(&marker, Duration::from_secs(5));
+
+    let agent_pid: u32 = fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fs::read_to_string(format!("/proc/{agent_pid}/comm"))
+        .map(|comm| comm.trim() != "claude")
+        .unwrap_or(true)
+    {
+        assert!(Instant::now() < deadline, "fake agent did not exec");
+        thread::sleep(Duration::from_millis(25));
+    }
+    // The wrapper bash, not the agent, leads the process group.
+    assert_ne!(
+        unsafe { libc::getpgid(agent_pid as libc::pid_t) },
+        agent_pid as libc::pid_t
+    );
+
+    let pane = send_request(
+        &socket_path,
+        &format!(
+            r#"{{"id":"wrap_pane","method":"pane.get","params":{{"pane_id":"{}"}}}}"#,
+            pane_id
+        ),
+    );
+    assert_eq!(pane["result"]["pane"]["cwd"], base.display().to_string());
+    assert_eq!(
+        pane["result"]["pane"]["foreground_cwd"],
+        worktree.display().to_string()
+    );
+
+    cleanup_spawned_herdr(child, base);
+}

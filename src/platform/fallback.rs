@@ -188,6 +188,12 @@ pub fn foreground_process_group_id(_child_pid: u32) -> Option<u32> {
     None
 }
 
+/// Parent process id. Not resolved on this platform, so shell-wrapper
+/// unwrapping in `PaneRuntime::foreground_cwd` stays at the group leader.
+pub fn process_parent_id(_pid: u32) -> Option<u32> {
+    None
+}
+
 /// Unsupported platform stub.
 pub fn process_cwd(_pid: u32) -> Option<PathBuf> {
     None

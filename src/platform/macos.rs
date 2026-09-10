@@ -874,6 +874,12 @@ fn procargs2_env(buf: &[u8]) -> Option<&[u8]> {
 /// Get the current working directory of a process.
 ///
 /// Uses `proc_pidinfo(PROC_PIDVNODEPATHINFO)` to read `pvi_cdir.vip_path`.
+/// Parent process id. Not resolved on this platform, so shell-wrapper
+/// unwrapping in `PaneRuntime::foreground_cwd` stays at the group leader.
+pub fn process_parent_id(_pid: u32) -> Option<u32> {
+    None
+}
+
 pub fn process_cwd(pid: u32) -> Option<PathBuf> {
     if pid == 0 {
         return None;

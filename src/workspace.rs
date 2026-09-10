@@ -20,6 +20,8 @@ mod git;
 mod tab;
 
 use self::git::git_status_cache_key_for_space;
+#[cfg(test)]
+pub(crate) use self::git::test_support as git_test_support;
 pub(crate) use self::{git::git_status_snapshot_for_cwd_with_demand, tab::MovedPane};
 pub use self::{
     git::{
@@ -42,12 +44,16 @@ pub struct WorktreeSpaceMembership {
 pub struct WorkspaceGitStatus {
     pub workspace_id: String,
     pub resolved_identity_cwd: PathBuf,
+    /// CWD the Git snapshot was taken from (foreground process group leader).
+    pub status_cwd: PathBuf,
     pub status_cache_key: PathBuf,
     pub demand: GitStatusRefreshDemand,
     pub auto_label: String,
     pub branch: Option<String>,
     pub ahead_behind: Option<(usize, usize)>,
     pub space: Option<GitSpaceMetadata>,
+    /// Checkout directory name when `status_cwd` sits inside a linked worktree.
+    pub foreground_worktree: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -73,30 +79,48 @@ pub(crate) fn discover_workspace_git_identity(
     (space, auto_label, status_cache_key)
 }
 
+pub(crate) fn foreground_worktree_name(space: Option<&GitSpaceMetadata>) -> Option<String> {
+    space
+        .filter(|space| space.is_linked_worktree)
+        .and_then(|space| space.repo_root.file_name())
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+}
+
 impl WorkspaceGitStatusSnapshot {
     pub fn into_workspace_status(
         self,
         workspace_id: String,
         resolved_identity_cwd: PathBuf,
+        status_cwd: PathBuf,
         status_cache_key: PathBuf,
         demand: GitStatusRefreshDemand,
     ) -> WorkspaceGitStatus {
-        let auto_label = self
-            .space
+        // The label keeps following the shell cwd, while branch / ahead-behind /
+        // worktree name come from the foreground process's checkout.
+        let identity_space = if resolved_identity_cwd == status_cwd {
+            self.space.clone()
+        } else {
+            git_space_metadata(&resolved_identity_cwd)
+        };
+        let auto_label = identity_space
             .as_ref()
             .map(|space| {
                 self::git::automatic_workspace_label(&resolved_identity_cwd, &space.repo_root)
             })
             .unwrap_or_else(|| fallback_label_from_cwd(&resolved_identity_cwd));
+        let foreground_worktree = foreground_worktree_name(self.space.as_ref());
         WorkspaceGitStatus {
             workspace_id,
             resolved_identity_cwd,
+            status_cwd,
             status_cache_key,
             demand,
             auto_label,
             branch: self.branch,
             ahead_behind: self.ahead_behind,
-            space: self.space,
+            space: identity_space,
+            foreground_worktree,
         }
     }
 }
@@ -184,8 +208,13 @@ pub struct Workspace {
     pub(crate) cached_identity_cwd: PathBuf,
     /// Automatic workspace label cached outside the render path.
     pub(crate) cached_auto_label: String,
-    /// Cache key for periodic Git status associated with `cached_identity_cwd`.
+    /// Cache key for periodic Git status associated with `cached_status_cwd`.
     pub(crate) cached_git_status_key: PathBuf,
+    /// CWD the cached branch / ahead-behind / worktree name were derived from
+    /// (foreground process group leader; falls back to `cached_identity_cwd`).
+    pub(crate) cached_status_cwd: PathBuf,
+    /// Checkout directory name when `cached_status_cwd` is inside a linked worktree.
+    pub(crate) cached_foreground_worktree: Option<String>,
     /// Cached current git branch for the workspace repo.
     pub(crate) cached_git_branch: Option<String>,
     /// Cached ahead/behind counts for the workspace repo's current branch upstream.
@@ -256,6 +285,8 @@ impl Workspace {
             cached_identity_cwd: identity_cwd.clone(),
             cached_auto_label,
             cached_git_status_key,
+            cached_status_cwd: identity_cwd.clone(),
+            cached_foreground_worktree: None,
             cached_git_branch: git_branch(&identity_cwd),
             cached_git_ahead_behind: None,
             cached_git_space,
@@ -408,6 +439,8 @@ impl Workspace {
                 cached_identity_cwd: initial_cwd.clone(),
                 cached_auto_label,
                 cached_git_status_key,
+                cached_status_cwd: initial_cwd.clone(),
+                cached_foreground_worktree: None,
                 cached_git_branch: git_branch(&initial_cwd),
                 cached_git_ahead_behind: None,
                 cached_git_space,
@@ -1023,6 +1056,20 @@ impl Workspace {
             .or_else(|| Some(self.identity_cwd.clone()))
     }
 
+    /// CWD used for Git status (branch, ahead/behind, worktree name). Follows the
+    /// foreground process of the first tab's root pane so `claude -w` style
+    /// launches report the worktree while the shell stays on the primary checkout.
+    pub fn resolved_status_cwd_from(
+        &self,
+        terminals: &HashMap<TerminalId, TerminalState>,
+        terminal_runtimes: &TerminalRuntimeRegistry,
+    ) -> Option<PathBuf> {
+        self.tabs
+            .first()
+            .and_then(|tab| tab.follow_cwd_for_pane(tab.root_pane, terminals, terminal_runtimes))
+            .or_else(|| self.resolved_identity_cwd_from(terminals, terminal_runtimes))
+    }
+
     #[cfg(test)]
     pub fn display_name(&self) -> String {
         if let Some(name) = &self.custom_name {
@@ -1201,6 +1248,8 @@ impl Workspace {
             cached_identity_cwd: identity_cwd.clone(),
             cached_auto_label: fallback_label_from_cwd(&identity_cwd),
             cached_git_status_key: identity_cwd.clone(),
+            cached_status_cwd: identity_cwd.clone(),
+            cached_foreground_worktree: None,
             cached_git_branch: git_branch(&identity_cwd),
             cached_git_ahead_behind: None,
             cached_git_space: None,

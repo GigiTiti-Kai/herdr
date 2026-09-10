@@ -2651,6 +2651,7 @@ mod tests {
                     repo_name: "other".into(),
                     repo_root: "/other/repo".into(),
                     is_linked_worktree: false,
+                    labels_as_repo: false,
                 }),
                 foreground_worktree: None,
             }],

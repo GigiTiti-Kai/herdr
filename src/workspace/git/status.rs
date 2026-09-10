@@ -6,7 +6,7 @@ use crate::workspace::{GitSpaceMetadata, WorkspaceGitStatusSnapshot};
 use super::{
     config::{deps_current, read_config, stamp, upstream_full_ref, ConfigCtx, FileDep},
     discovery::{
-        automatic_workspace_label, canonicalize_best_effort_path, fallback_label_from_cwd,
+        automatic_space_label, canonicalize_best_effort_path, fallback_label_from_cwd,
         git_ref_storage_is_reftable, git_rev_parse_verify, git_space_metadata_from_info,
         git_symbolic_head_full, git_worktree_info, read_git_ref_file, read_ref_oid,
         GitWorktreeInfo,
@@ -132,8 +132,8 @@ pub fn git_status_snapshot_for_cwd_with_demand(
             }),
         );
     };
-    let auto_label = automatic_workspace_label(cwd, &repository_context.0.repo_root);
     let space = git_space_metadata_from_info(&repository_context.0);
+    let auto_label = automatic_space_label(cwd, &space);
 
     if !demand.ahead_behind {
         let fingerprint = fingerprint(repository_context, false);
@@ -577,8 +577,8 @@ mod tests {
     }
 
     #[test]
-    fn linked_worktree_refresh_keeps_checkout_name_as_auto_label() {
-        let (base, _, checkout) =
+    fn linked_worktree_refresh_uses_repo_name_as_auto_label() {
+        let (base, repo, checkout) =
             crate::workspace::git::test_support::create_repo_with_linked_worktree(
                 "linked-refresh-label",
             );
@@ -587,7 +587,7 @@ mod tests {
 
         assert_eq!(
             snapshot.auto_label,
-            checkout.file_name().unwrap().to_str().unwrap()
+            repo.file_name().unwrap().to_str().unwrap()
         );
 
         std::fs::remove_dir_all(base).unwrap();

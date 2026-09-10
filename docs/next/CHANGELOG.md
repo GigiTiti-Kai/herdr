@@ -6,6 +6,9 @@
 - Space rows now derive `branch`, `git_status`, and the new `worktree` token (rendered as `wt:<checkout>`) from the foreground process's checkout, so `claude -w` style launches show the worktree branch while the workspace keeps the repository name.
 - Space entries can be folded to their first row by clicking the detail rows or pressing Space in navigate mode; the state persists per client.
 
+### Changed
+- A workspace whose shell sits inside a linked worktree of a `.git` repository is now labeled with the repository name; the checkout shows up as the `worktree` token. Bare-repository layouts keep their checkout names.
+
 ### Fixed
 - Foreground cwd resolution now looks through a shell wrapper that only spawned the agent (`( ... claude )` launchers), so the worktree branch shows even when the wrapper subshell leads the process group. Non-agent helpers inside the group still never override the leader (#3270).
 

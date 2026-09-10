@@ -1137,6 +1137,12 @@ pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
     select_pane_foreground_job_cached(child_pid).map(|job| job.process_group_id)
 }
 
+/// Parent process id. Not resolved on this platform, so shell-wrapper
+/// unwrapping in `PaneRuntime::foreground_cwd` stays at the group leader.
+pub fn process_parent_id(_pid: u32) -> Option<u32> {
+    None
+}
+
 pub fn process_cwd(pid: u32) -> Option<PathBuf> {
     let process = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ)?;
     let process_parameters = read_process_parameters(process.0)?;

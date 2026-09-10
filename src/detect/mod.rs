@@ -242,6 +242,7 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
 
 /// True when the process is a recognized coding agent (after runtime/shell
 /// wrapper normalization).
+#[cfg(unix)]
 pub fn is_agent_process(process: &crate::platform::ForegroundProcess) -> bool {
     identify_agent(&normalized_process_name(process)).is_some()
 }

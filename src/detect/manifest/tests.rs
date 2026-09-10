@@ -1000,7 +1000,7 @@ fn codex_osc_title_plain_is_idle() {
 }
 
 #[test]
-fn codex_trust_directory_requires_live_top_region() {
+fn codex_trust_directory_requires_live_chooser() {
     let screen = "> You are in C:\\Users\\user\\project\n\n\
         Do you trust the contents of this\n\
         directory? Working with untrusted\n\
@@ -1031,6 +1031,25 @@ fn codex_trust_directory_requires_live_top_region() {
         Some("trust_directory")
     );
     assert!(!result.visible_blocker);
+
+    // Inline startup keeps the shell and launcher output above the chooser.
+    for startup in [
+        format!("❯ cxy\nPreparing worktree (detached HEAD)\n{screen}"),
+        screen.replacen("> You are in", "You are in", 1),
+    ] {
+        let result = osc_explain(Agent::Codex, &startup, "project", "");
+        assert_eq!(result.state, AgentState::Blocked);
+        assert!(result.visible_blocker);
+    }
+    for finished in [
+        format!("{screen}\n› Ask Codex to do anything\n"),
+        screen.replace("1. Yes, continue", "Explain this dialog"),
+    ] {
+        assert_eq!(
+            osc_explain(Agent::Codex, &finished, "project", "").state,
+            AgentState::Idle
+        );
+    }
 }
 
 #[test]
@@ -1102,6 +1121,24 @@ fn codex_screen_working_fallback_handles_static_osc_title() {
         Some("screen_working_fallback")
     );
     assert!(result.visible_working);
+}
+
+#[test]
+fn codex_screen_working_fallback_handles_animated_composer() {
+    let screen = "• Working (1m 13s • esc to interrupt)\n\n\
+          ⠈                 ⢀       ⠄\n\
+        › Ask Codex to do anything ⠂\n\
+          ⠠       ⡀              ⠁\n\
+          gpt-6-astra high · /work\n";
+    let result = osc_explain(Agent::Codex, screen, "project", "");
+    assert_eq!(result.state, AgentState::Working);
+    assert!(result.visible_working);
+
+    let idle = screen.replace("• Working (1m 13s • esc to interrupt)", "• Finished.");
+    assert_eq!(
+        osc_explain(Agent::Codex, &idle, "project", "").state,
+        AgentState::Idle
+    );
 }
 
 #[test]
@@ -1213,6 +1250,10 @@ fn codex_transcript_viewer_outranks_working_fallback() {
 #[test]
 fn codex_screen_working_fallback_ignores_stale_and_prompt_text() {
     let screens = [
+        "• Working (4s • esc to interrupt)\n\
+         • Finished.\n\
+         › Ask Codex to do anything\n\
+         gpt-6-astra high · /work\n",
         "◦ Working (1m 16s • esc to interrupt)\n\
          ■ Conversation interrupted\n\
          › Use /skills to list available skills\n\

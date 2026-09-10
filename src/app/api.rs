@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 mod agent_view;
@@ -34,6 +35,9 @@ impl App {
                 results,
                 cache_updates,
             } => self.handle_git_status_refreshed(results, cache_updates),
+            AppEvent::AgentGitContextsRefreshed(contexts) => {
+                self.handle_agent_git_contexts_refreshed(contexts)
+            }
             AppEvent::TabBarCommandFinished {
                 generation,
                 segment_index,
@@ -75,6 +79,20 @@ impl App {
         changed
     }
 
+    fn handle_agent_git_contexts_refreshed(
+        &mut self,
+        contexts: Vec<(std::path::PathBuf, crate::workspace::AgentGitContext)>,
+    ) -> bool {
+        let next = contexts.into_iter().collect::<HashMap<_, _>>();
+        if next == self.agent_git_contexts {
+            return false;
+        }
+        self.agent_git_contexts = next;
+        self.render_dirty.request_generic();
+        self.render_notify.notify_one();
+        true
+    }
+
     pub(crate) fn handle_internal_event(&mut self, ev: AppEvent) {
         let _ = self.handle_internal_event_with_pane_updates(ev);
     }
@@ -113,6 +131,10 @@ impl App {
         } = ev
         {
             self.handle_git_status_refreshed(results, cache_updates);
+            return Vec::new();
+        }
+        if let AppEvent::AgentGitContextsRefreshed(contexts) = ev {
+            let _ = self.handle_agent_git_contexts_refreshed(contexts);
             return Vec::new();
         }
 

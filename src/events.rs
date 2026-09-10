@@ -149,6 +149,8 @@ pub enum AppEvent {
         pane_id: PaneId,
         cwd: std::path::PathBuf,
     },
+    /// Background git discovery completed for agent panes' foreground cwds.
+    AgentGitContextsRefreshed(Vec<(std::path::PathBuf, crate::workspace::AgentGitContext)>),
     /// Background git status refresh completed for workspaces.
     GitStatusRefreshed {
         results: Vec<WorkspaceGitStatus>,

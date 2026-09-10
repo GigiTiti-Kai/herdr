@@ -379,7 +379,7 @@ Agent rows accept these built-in tokens:
 - `agent` — detected or reported agent display name.
 - `terminal_title` — latest OSC 0/2 terminal title after safety normalization.
 - `terminal_title_stripped` — the terminal title with one recognized leading activity or spinner glyph and its following whitespace removed.
-- `$name` — custom pane metadata named `name`.
+- `$name` — custom pane metadata named `name`. Herdr fills `$repo` and `$worktree` itself when the pane's foreground process runs in a different repository or linked worktree than its workspace (`wt:<checkout>`); a value reported by the pane wins.
 
 Space rows accept these built-in tokens:
 

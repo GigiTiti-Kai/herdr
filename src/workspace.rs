@@ -79,6 +79,26 @@ pub(crate) fn discover_workspace_git_identity(
     (space, auto_label, status_cache_key)
 }
 
+/// Git context of one agent pane, derived from its foreground cwd. Used to
+/// annotate agent rows whose pane runs somewhere other than its workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AgentGitContext {
+    /// Repository label as a workspace on that checkout would show it.
+    pub repo: Option<String>,
+    /// Checkout directory name when the cwd is inside a linked worktree.
+    pub worktree: Option<String>,
+}
+
+pub(crate) fn agent_git_context(cwd: &std::path::Path) -> AgentGitContext {
+    let space = git_space_metadata(cwd);
+    AgentGitContext {
+        repo: space
+            .as_ref()
+            .map(|space| self::git::automatic_space_label(cwd, space)),
+        worktree: foreground_worktree_name(space.as_ref()),
+    }
+}
+
 pub(crate) fn foreground_worktree_name(space: Option<&GitSpaceMetadata>) -> Option<String> {
     space
         .filter(|space| space.is_linked_worktree)
@@ -1618,6 +1638,28 @@ mod tests {
 
         assert_eq!(recovered.pane_id, source_pane);
         assert!(!target.tabs[0].panes.contains_key(&source_pane));
+    }
+
+    #[test]
+    fn agent_git_context_reports_repo_and_worktree_for_linked_checkout() {
+        let (base, repo, checkout) =
+            self::git::test_support::create_repo_with_linked_worktree("agent-git-context");
+        let repo_name = repo.file_name().unwrap().to_str().unwrap();
+
+        let in_worktree = agent_git_context(&checkout);
+        assert_eq!(in_worktree.repo.as_deref(), Some(repo_name));
+        assert_eq!(
+            in_worktree.worktree.as_deref(),
+            checkout.file_name().unwrap().to_str()
+        );
+
+        let on_primary = agent_git_context(&repo);
+        assert_eq!(on_primary.repo.as_deref(), Some(repo_name));
+        assert_eq!(on_primary.worktree, None);
+
+        assert_eq!(agent_git_context(&base), AgentGitContext::default());
+
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

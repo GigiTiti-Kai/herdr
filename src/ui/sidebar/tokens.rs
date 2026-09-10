@@ -71,6 +71,15 @@ pub(crate) fn agent_rows(
     context: AgentTokenContext<'_>,
     state_text: &str,
 ) -> Vec<Vec<ResolvedToken>> {
+    let title_token = |value: &str| {
+        let unnamed_codex = context.canonical_agent == Some(crate::detect::Agent::Codex)
+            && value.len() == 36
+            && value.bytes().enumerate().all(|(i, byte)| match i {
+                8 | 13 | 18 | 23 => byte == b'-',
+                _ => byte.is_ascii_hexdigit(),
+            });
+        ResolvedTokenKind::TerminalTitle(if unnamed_codex { "CODEX" } else { value }.to_string())
+    };
     config
         .rows_for_agent(context.canonical_agent)
         .iter()
@@ -99,12 +108,10 @@ pub(crate) fn agent_rows(
                         AgentSidebarToken::Agent => context
                             .agent_label
                             .map(|value| ResolvedTokenKind::Agent(value.to_string())),
-                        AgentSidebarToken::TerminalTitle => context
-                            .terminal_title
-                            .map(|value| ResolvedTokenKind::TerminalTitle(value.to_string())),
-                        AgentSidebarToken::TerminalTitleStripped => context
-                            .terminal_title_stripped
-                            .map(|value| ResolvedTokenKind::TerminalTitle(value.to_string())),
+                        AgentSidebarToken::TerminalTitle => context.terminal_title.map(title_token),
+                        AgentSidebarToken::TerminalTitleStripped => {
+                            context.terminal_title_stripped.map(title_token)
+                        }
                         AgentSidebarToken::Custom(name) => context
                             .tokens
                             .get(name)
@@ -426,6 +433,51 @@ rows = [[{ token = "$load", rules = [{ lt = 50, dim = true }] }]]
                 ResolvedToken::unstyled(ResolvedTokenKind::Custom("reviewing auth".into())),
             ]]
         );
+    }
+
+    #[test]
+    fn codex_startup_uuid_displays_as_codex_only_in_title_tokens() {
+        use crate::detect::Agent;
+        let config = AgentsSidebarConfig {
+            rows: vec![vec![
+                AgentSidebarToken::TerminalTitle,
+                AgentSidebarToken::TerminalTitleStripped,
+                AgentSidebarToken::Custom("terminal_title".into()),
+            ]],
+            ..Default::default()
+        };
+        let uuid = "01a08a82-3f58-7890-aecb-fa10da123456";
+        let upper = uuid.to_ascii_uppercase();
+        for (agent, title, expected) in [
+            (Some(Agent::Codex), uuid, "CODEX"),
+            (Some(Agent::Codex), upper.as_str(), "CODEX"),
+            (
+                Some(Agent::Codex),
+                "起動タイトルの修正",
+                "起動タイトルの修正",
+            ),
+            (
+                Some(Agent::Codex),
+                "01a08a82-3f58-7890-aecb-fa10da12345z",
+                "01a08a82-3f58-7890-aecb-fa10da12345z",
+            ),
+            (Some(Agent::Claude), uuid, uuid),
+            (None, uuid, uuid),
+        ] {
+            let mut entry = entry();
+            entry.canonical_agent = agent;
+            entry.terminal_title = Some(title.into());
+            entry.terminal_title_stripped = Some(title.into());
+            entry.tokens.insert("terminal_title".into(), uuid.into());
+            let rows = agent_rows(&config, context(&entry), "idle");
+            for token in &rows[0][..2] {
+                assert_eq!(
+                    token.kind,
+                    ResolvedTokenKind::TerminalTitle(expected.into())
+                );
+            }
+            assert_eq!(rows[0][2].kind, ResolvedTokenKind::Custom(uuid.into()));
+        }
     }
 
     #[test]

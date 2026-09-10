@@ -1819,6 +1819,7 @@ impl AppState {
                 let _ = cache_updates;
                 Vec::new()
             }
+            AppEvent::AgentGitContextsRefreshed(_) => Vec::new(),
             AppEvent::WorktreeAddFinished(_) => Vec::new(),
             AppEvent::WorktreeRemoveFinished(_) => Vec::new(),
             AppEvent::TabBarCommandFinished { .. } => Vec::new(),

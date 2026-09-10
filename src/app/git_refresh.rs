@@ -58,6 +58,7 @@ impl App {
         self.git_refresh_in_flight = true;
         let event_tx = self.event_tx.clone();
         let cache = self.git_status_cache.clone();
+        let agent_cwds = self.agent_foreground_cwds();
         let mut demand = self.git_refresh_demand();
         if self.git_identity_refresh_requested {
             demand.branch = true;
@@ -73,6 +74,14 @@ impl App {
                 results: output.results,
                 cache_updates: output.cache_updates,
             });
+            let contexts = agent_cwds
+                .into_iter()
+                .map(|cwd| {
+                    let context = crate::workspace::agent_git_context(&cwd);
+                    (cwd, context)
+                })
+                .collect();
+            let _ = event_tx.blocking_send(AppEvent::AgentGitContextsRefreshed(contexts));
         });
     }
 
@@ -112,6 +121,19 @@ impl App {
             }
         }
         demand
+    }
+
+    /// Distinct foreground cwds of every pane hosting an agent.
+    fn agent_foreground_cwds(&self) -> Vec<PathBuf> {
+        let mut cwds = self
+            .collect_agent_infos()
+            .into_iter()
+            .filter_map(|agent| agent.foreground_cwd)
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
+        cwds.sort();
+        cwds.dedup();
+        cwds
     }
 
     fn workspace_git_refresh_items(

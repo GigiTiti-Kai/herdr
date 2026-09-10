@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Agent rows can show `$repo` and `$worktree` (`wt:<checkout>`), filled by Herdr when a pane's foreground process runs in a different repository or linked worktree than its workspace.
 - Space rows now derive `branch`, `git_status`, and the new `worktree` token (rendered as `wt:<checkout>`) from the foreground process's checkout, so `claude -w` style launches show the worktree branch while the workspace keeps the repository name.
 - Space entries can be folded to their first row by clicking the detail rows or pressing Space in navigate mode; the state persists per client.
 

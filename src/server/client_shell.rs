@@ -32,7 +32,7 @@ pub(super) fn snapshot(
             app.public_pane_id(workspace_index, pane_id)
         })
         .or_else(|| snapshot.focused_pane_id.clone());
-    let workspaces = snapshot
+    let workspaces: Vec<protocol::ClientShellWorkspace> = snapshot
         .workspaces
         .into_iter()
         .zip(&app.state.workspaces)
@@ -126,6 +126,15 @@ pub(super) fn snapshot(
             }
         })
         .collect();
+    let space_identity = workspaces
+        .iter()
+        .map(|workspace: &protocol::ClientShellWorkspace| {
+            (
+                workspace.workspace_id.clone(),
+                (workspace.label.clone(), workspace.worktree_name.clone()),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
     let agents = snapshot
         .agents
         .into_iter()
@@ -134,7 +143,15 @@ pub(super) fn snapshot(
             let focused = focused_pane_id.as_deref() == Some(pane_id.as_str());
             let mut state_labels = agent.state_labels.into_iter().collect::<Vec<_>>();
             state_labels.sort_by(|left, right| left.0.cmp(&right.0));
-            let mut tokens = agent.tokens.into_iter().collect::<Vec<_>>();
+            let mut tokens = agent.tokens;
+            if let Some((label, worktree)) = space_identity.get(&agent.workspace_id) {
+                let context = agent
+                    .foreground_cwd
+                    .as_deref()
+                    .and_then(|cwd| app.agent_git_contexts.get(std::path::Path::new(cwd)));
+                inject_agent_git_tokens(&mut tokens, context, label, worktree.as_deref());
+            }
+            let mut tokens = tokens.into_iter().collect::<Vec<_>>();
             tokens.sort_by(|left, right| left.0.cmp(&right.0));
             protocol::ClientShellAgent {
                 pane_id,
@@ -540,8 +557,79 @@ fn split_hit_rect(
     Some(hit)
 }
 
+/// Add `$repo` / `$worktree` metadata for an agent whose pane runs outside
+/// its workspace's own checkout. Values reported by the pane itself win.
+pub(super) fn inject_agent_git_tokens(
+    tokens: &mut std::collections::HashMap<String, String>,
+    context: Option<&crate::workspace::AgentGitContext>,
+    workspace_label: &str,
+    workspace_worktree: Option<&str>,
+) {
+    let Some(context) = context else {
+        return;
+    };
+    if let Some(repo) = context
+        .repo
+        .as_deref()
+        .filter(|repo| *repo != workspace_label)
+    {
+        tokens
+            .entry("repo".to_string())
+            .or_insert_with(|| repo.to_string());
+    }
+    if let Some(worktree) = context
+        .worktree
+        .as_deref()
+        .filter(|worktree| Some(*worktree) != workspace_worktree)
+    {
+        tokens
+            .entry("worktree".to_string())
+            .or_insert_with(|| format!("wt:{worktree}"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn agent_git_tokens_only_mark_panes_outside_their_workspace_checkout() {
+        use super::inject_agent_git_tokens;
+        use crate::workspace::AgentGitContext;
+        let context = AgentGitContext {
+            repo: Some("herdr".into()),
+            worktree: Some("typed-splashing-dusk".into()),
+        };
+
+        // Pane in another repo's worktree, hosted by the `chat` workspace.
+        let mut tokens = std::collections::HashMap::new();
+        inject_agent_git_tokens(&mut tokens, Some(&context), "chat", None);
+        assert_eq!(tokens.get("repo").map(String::as_str), Some("herdr"));
+        assert_eq!(
+            tokens.get("worktree").map(String::as_str),
+            Some("wt:typed-splashing-dusk")
+        );
+
+        // Same checkout as the workspace itself: nothing to add.
+        let mut tokens = std::collections::HashMap::new();
+        inject_agent_git_tokens(
+            &mut tokens,
+            Some(&context),
+            "herdr",
+            Some("typed-splashing-dusk"),
+        );
+        assert!(tokens.is_empty());
+
+        // Values reported by the pane win over derived ones.
+        let mut tokens =
+            std::collections::HashMap::from([("repo".to_string(), "mine".to_string())]);
+        inject_agent_git_tokens(&mut tokens, Some(&context), "chat", None);
+        assert_eq!(tokens.get("repo").map(String::as_str), Some("mine"));
+
+        // No context known yet: untouched.
+        let mut tokens = std::collections::HashMap::new();
+        inject_agent_git_tokens(&mut tokens, None, "chat", None);
+        assert!(tokens.is_empty());
+    }
+
     use super::*;
 
     #[test]

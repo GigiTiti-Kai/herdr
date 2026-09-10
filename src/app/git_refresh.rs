@@ -281,6 +281,7 @@ mod tests {
                     repo_name: "repo".into(),
                     repo_root: cache_key.clone(),
                     is_linked_worktree: false,
+                    labels_as_repo: false,
                 }),
             },
         };

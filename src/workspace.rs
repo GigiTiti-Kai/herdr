@@ -70,7 +70,7 @@ pub(crate) fn discover_workspace_git_identity(
     let space = git_space_metadata(cwd);
     let auto_label = space
         .as_ref()
-        .map(|space| self::git::automatic_workspace_label(cwd, &space.repo_root))
+        .map(|space| self::git::automatic_space_label(cwd, space))
         .unwrap_or_else(|| fallback_label_from_cwd(cwd));
     let status_cache_key = space
         .as_ref()
@@ -105,9 +105,7 @@ impl WorkspaceGitStatusSnapshot {
         };
         let auto_label = identity_space
             .as_ref()
-            .map(|space| {
-                self::git::automatic_workspace_label(&resolved_identity_cwd, &space.repo_root)
-            })
+            .map(|space| self::git::automatic_space_label(&resolved_identity_cwd, space))
             .unwrap_or_else(|| fallback_label_from_cwd(&resolved_identity_cwd));
         let foreground_worktree = foreground_worktree_name(self.space.as_ref());
         WorkspaceGitStatus {
@@ -1623,17 +1621,19 @@ mod tests {
     }
 
     #[test]
-    fn linked_worktree_auto_label_uses_checkout_name_not_repo_name() {
+    fn linked_worktree_auto_label_uses_repo_name_not_checkout_name() {
+        // Fork rule: the space is the repository; the checkout is reported by
+        // the `worktree` token instead of replacing the label.
         let (base, repo, checkout) =
             self::git::test_support::create_repo_with_linked_worktree("linked-auto-label");
 
         let (space, auto_label, _) = discover_workspace_git_identity(&checkout);
 
-        assert_eq!(
-            space.unwrap().repo_name,
-            repo.file_name().unwrap().to_str().unwrap()
-        );
-        assert_eq!(auto_label, checkout.file_name().unwrap().to_str().unwrap());
+        let space = space.unwrap();
+        assert!(space.labels_as_repo);
+        assert_eq!(space.repo_name, repo.file_name().unwrap().to_str().unwrap());
+        assert_eq!(auto_label, repo.file_name().unwrap().to_str().unwrap());
+        assert_ne!(auto_label, checkout.file_name().unwrap().to_str().unwrap());
 
         std::fs::remove_dir_all(base).unwrap();
     }

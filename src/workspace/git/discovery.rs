@@ -10,6 +10,11 @@ pub struct GitSpaceMetadata {
     pub repo_name: String,
     pub repo_root: PathBuf,
     pub is_linked_worktree: bool,
+    /// Linked worktree of an ordinary `.git` repository: the automatic label
+    /// is the repository name and the checkout shows up as the `worktree`
+    /// token. Bare layouts keep their checkout names (their `repo_name` is
+    /// the `.bare` container).
+    pub labels_as_repo: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +76,16 @@ pub(crate) fn automatic_workspace_label(cwd: &Path, repo_root: &Path) -> String 
         .unwrap_or_else(|| fallback_label_from_cwd(cwd))
 }
 
+/// Workspace label for a discovered Git space: the repository name for a
+/// linked worktree of a `.git` repository, otherwise the checkout name.
+pub(crate) fn automatic_space_label(cwd: &Path, space: &GitSpaceMetadata) -> String {
+    if space.labels_as_repo {
+        space.repo_name.clone()
+    } else {
+        automatic_workspace_label(cwd, &space.repo_root)
+    }
+}
+
 pub(super) fn git_space_metadata_from_info(info: &GitWorktreeInfo) -> GitSpaceMetadata {
     let key = canonicalize_best_effort_path(&info.git_common_dir)
         .display()
@@ -98,6 +113,7 @@ pub(super) fn git_space_metadata_from_info(info: &GitWorktreeInfo) -> GitSpaceMe
         repo_name,
         repo_root: info.repo_root.clone(),
         is_linked_worktree: info.is_linked_worktree,
+        labels_as_repo: info.is_linked_worktree && common_dir_name == Some(".git"),
     }
 }
 

@@ -91,6 +91,8 @@ pub(crate) fn render_collapsed_sidebar(
             workspace_id: workspace.workspace_id.clone(),
             indented: false,
             group_toggle: None,
+            detail_rect: None,
+            fold_toggle: None,
         });
     }
 
@@ -227,15 +229,17 @@ pub(crate) fn render_sidebar(
                 .workspaces
                 .get(entry.index)
                 .map(|workspace| {
-                    workspace_rows(
+                    let rows = workspace_rows(
                         workspace,
                         displayed_workspace_status(snapshot, workspace, state.collapsed_groups),
                         entry.indented,
                         &config.spaces,
-                    )
-                    .len()
-                    .max(1)
-                    .min(u16::MAX as usize) as u16
+                    );
+                    let folded = state.folded_workspaces.contains(&workspace.workspace_id);
+                    visible_workspace_rows(rows, folded)
+                        .len()
+                        .max(1)
+                        .min(u16::MAX as usize) as u16
                 })
                 .unwrap_or(1)
         })
@@ -288,7 +292,10 @@ pub(crate) fn render_sidebar(
             continue;
         };
         let status = displayed_workspace_status(snapshot, workspace, state.collapsed_groups);
-        let rows = workspace_rows(workspace, status, entry.indented, &config.spaces);
+        let full_rows = workspace_rows(workspace, status, entry.indented, &config.spaces);
+        let foldable = full_rows.len() > 1;
+        let folded = foldable && state.folded_workspaces.contains(&workspace.workspace_id);
+        let rows = visible_workspace_rows(full_rows, folded);
         let row_height = (rows.len().max(1).min(u16::MAX as usize) as u16).min(body.height);
         if y.saturating_add(row_height) > body.bottom() {
             break;
@@ -332,12 +339,34 @@ pub(crate) fn render_sidebar(
             );
             (rect, key)
         });
+        let detail_rect = (!folded && foldable).then(|| {
+            Rect::new(
+                rect.x,
+                rect.y + 1,
+                rect.width,
+                rect.height.saturating_sub(1),
+            )
+        });
+        let fold_toggle = folded.then(|| {
+            let glyph = Rect::new(rect.right().saturating_sub(2), rect.y, 1, 1);
+            put_text(
+                buffer,
+                glyph.x,
+                glyph.y,
+                glyph.width,
+                "…",
+                Style::default().fg(palette.overlay0),
+            );
+            glyph
+        });
         hits.workspaces.push(WorkspaceHit {
             rect,
             endpoint_id: ClientEndpointId::Local,
             workspace_id: workspace.workspace_id.clone(),
             indented: entry.indented,
             group_toggle,
+            detail_rect,
+            fold_toggle,
         });
         let gap = entries
             .get(entry_position + 1)
@@ -581,6 +610,16 @@ pub(super) fn displayed_workspace_status(
         .map(|candidate| candidate.agent_status)
         .max_by_key(|status| status_priority(*status))
         .unwrap_or(workspace.agent_status)
+}
+
+fn visible_workspace_rows(
+    mut rows: Vec<Vec<crate::ui::ResolvedToken>>,
+    folded: bool,
+) -> Vec<Vec<crate::ui::ResolvedToken>> {
+    if folded {
+        rows.truncate(1);
+    }
+    rows
 }
 
 pub(in crate::client::shell) fn workspace_rows(

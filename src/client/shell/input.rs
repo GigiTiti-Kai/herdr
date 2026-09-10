@@ -681,6 +681,16 @@ impl ClientShellState {
         let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
         if modifiers.is_empty() {
             match code {
+                KeyCode::Char(' ') => {
+                    if let Some(workspace_id) = self.navigate_workspace_id.clone() {
+                        if !self.folded_workspaces.remove(&workspace_id) {
+                            self.folded_workspaces.insert(workspace_id);
+                        }
+                        self.persist_chrome_preferences(outcome);
+                    }
+                    outcome.repaint = true;
+                    return;
+                }
                 KeyCode::Enter => {
                     let selected = self.navigate_workspace_id.clone();
                     self.mode = ClientShellMode::Terminal;

@@ -1017,6 +1017,10 @@ pub struct ClientShellWorkspace {
     pub label: String,
     pub custom_label: bool,
     pub branch: Option<String>,
+    /// Checkout directory name when the workspace's foreground process runs
+    /// inside a linked Git worktree. Optional so older peers can omit it.
+    #[serde(default)]
+    pub worktree_name: Option<String>,
     pub git_ahead_behind: Option<(usize, usize)>,
     pub tokens: Vec<(String, String)>,
     pub worktree: Option<ClientShellWorktree>,
@@ -2651,6 +2655,7 @@ mod tests {
                 label: "shell".into(),
                 custom_label: false,
                 branch: Some("main".into()),
+                worktree_name: None,
                 git_ahead_behind: None,
                 tokens: Vec::new(),
                 worktree: None,

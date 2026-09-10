@@ -19,6 +19,7 @@ pub(crate) enum ResolvedTokenKind {
     Pane(String),
     Agent(String),
     TerminalTitle(String),
+    Worktree(String),
     Branch(String),
     GitStatus { ahead: usize, behind: usize },
     Custom(String),
@@ -34,6 +35,7 @@ impl ResolvedTokenKind {
             | Self::Pane(value)
             | Self::Agent(value)
             | Self::TerminalTitle(value)
+            | Self::Worktree(value)
             | Self::Branch(value)
             | Self::Custom(value) => Some(value),
             Self::StateIcon | Self::GitStatus { .. } => None,
@@ -123,6 +125,7 @@ pub(crate) fn agent_rows(
 
 pub(crate) struct SpaceTokenContext<'a> {
     pub(crate) workspace: &'a str,
+    pub(crate) worktree: Option<&'a str>,
     pub(crate) branch: Option<&'a str>,
     pub(crate) state_text: &'a str,
     pub(crate) ahead_behind: Option<(usize, usize)>,
@@ -150,6 +153,10 @@ pub(crate) fn space_rows(
                         SpaceSidebarToken::Workspace => {
                             Some(ResolvedTokenKind::Workspace(context.workspace.to_string()))
                         }
+                        SpaceSidebarToken::Worktree if !context.suppress_git_details => context
+                            .worktree
+                            .map(|name| ResolvedTokenKind::Worktree(name.to_string())),
+                        SpaceSidebarToken::Worktree => None,
                         SpaceSidebarToken::Branch if !context.suppress_git_details => context
                             .branch
                             .map(|branch| ResolvedTokenKind::Branch(branch.to_string())),
@@ -327,6 +334,7 @@ rows = [[{ token = "$load", rules = [{ lt = 50, dim = true }] }]]
                 &config.spaces,
                 SpaceTokenContext {
                     workspace: "repo",
+                    worktree: None,
                     branch: None,
                     state_text: "working",
                     ahead_behind: None,
@@ -476,6 +484,49 @@ rows = [[{ token = "$load", rules = [{ lt = 50, dim = true }] }]]
     }
 
     #[test]
+    fn space_rows_render_worktree_token_only_when_present() {
+        let config = SpacesSidebarConfig {
+            rows: vec![
+                vec![SpaceSidebarToken::Workspace],
+                vec![SpaceSidebarToken::Worktree],
+                vec![SpaceSidebarToken::Branch],
+            ],
+            ..SpacesSidebarConfig::default()
+        };
+        let tokens = std::collections::HashMap::new();
+        let with = space_rows(
+            &config,
+            SpaceTokenContext {
+                workspace: "prompts-box",
+                worktree: Some("glittery-sleeping-hopcroft"),
+                branch: Some("chore/x"),
+                state_text: "idle",
+                ahead_behind: None,
+                tokens: &tokens,
+                suppress_git_details: false,
+            },
+        );
+        assert_eq!(with.len(), 3);
+        assert!(matches!(
+            &with[1][0].kind,
+            ResolvedTokenKind::Worktree(name) if name == "glittery-sleeping-hopcroft"
+        ));
+        let without = space_rows(
+            &config,
+            SpaceTokenContext {
+                workspace: "prompts-box",
+                worktree: None,
+                branch: Some("main"),
+                state_text: "idle",
+                ahead_behind: None,
+                tokens: &tokens,
+                suppress_git_details: false,
+            },
+        );
+        assert_eq!(without.len(), 2, "worktree row disappears when absent");
+    }
+
+    #[test]
     fn grouped_children_suppress_all_builtin_git_details() {
         let config = SpacesSidebarConfig::default();
 
@@ -484,6 +535,7 @@ rows = [[{ token = "$load", rules = [{ lt = 50, dim = true }] }]]
                 &config,
                 SpaceTokenContext {
                     workspace: "feature",
+                    worktree: None,
                     branch: Some("worktree/feature"),
                     state_text: "idle",
                     ahead_behind: Some((2, 1)),
@@ -511,6 +563,7 @@ rows = [[{ token = "$load", rules = [{ lt = 50, dim = true }] }]]
                 &config,
                 SpaceTokenContext {
                     workspace: "repo",
+                    worktree: None,
                     branch: None,
                     state_text: "idle",
                     ahead_behind: None,

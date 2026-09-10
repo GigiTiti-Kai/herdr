@@ -56,6 +56,7 @@ fn focused_workspace_change_reveals_new_workspace_in_full_sidebar() {
             number,
             label: format!("space-{number}"),
             branch: None,
+            worktree_name: None,
             focused: number == 1,
             ..template.clone()
         })

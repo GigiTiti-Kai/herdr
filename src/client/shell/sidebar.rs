@@ -603,6 +603,7 @@ pub(in crate::client::shell) fn workspace_rows(
         config,
         crate::ui::SpaceTokenContext {
             workspace: label,
+            worktree: workspace.worktree_name.as_deref(),
             branch: workspace.branch.as_deref(),
             state_text: status_text(status),
             ahead_behind: workspace.git_ahead_behind,

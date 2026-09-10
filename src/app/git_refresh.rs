@@ -105,7 +105,8 @@ impl App {
         let mut demand = GitStatusRefreshDemand::default();
         for token in self.state.sidebar_spaces.rows.iter().flatten() {
             match token.parts().0 {
-                crate::config::SpaceSidebarToken::Branch => demand.branch = true,
+                crate::config::SpaceSidebarToken::Branch
+                | crate::config::SpaceSidebarToken::Worktree => demand.branch = true,
                 crate::config::SpaceSidebarToken::GitStatus => demand.ahead_behind = true,
                 _ => {}
             }

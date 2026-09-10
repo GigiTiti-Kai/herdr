@@ -1123,6 +1123,10 @@ impl Workspace {
         self.cached_git_branch.clone()
     }
 
+    pub fn foreground_worktree(&self) -> Option<&str> {
+        self.cached_foreground_worktree.as_deref()
+    }
+
     pub fn git_ahead_behind(&self) -> Option<(usize, usize)> {
         self.cached_git_ahead_behind
     }

@@ -1,7 +1,7 @@
 id = "codex"
-version = "2026.09.05.1"
+version = "2026.09.10.1"
 min_engine_version = 3
-updated_at = "2026-09-05T00:00:00Z"
+updated_at = "2026-09-10T00:00:00Z"
 
 [[rules]]
 id = "osc_title_blocked"
@@ -35,11 +35,13 @@ any = [
 id = "trust_directory"
 state = "blocked"
 priority = 950
-region = "top_non_empty_lines(20)"
+region = "bottom_non_empty_lines(20)"
 visible_blocker = true
 all = [
-  { regex = ['\A> You are in [^\r\n]+(?:\r?\n|$)'] },
+  { line_regex = ['^(?:> )?You are in [^\r\n]+$'] },
   { regex = ['(?s)Do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory\?'] },
+  { contains = ["1. Yes, continue", "2. No, quit"] },
+  { regex = ['Press enter to continue\s*\z'] },
 ]
 
 [[rules]]
@@ -80,10 +82,14 @@ any = [
 id = "screen_working_fallback"
 state = "working"
 priority = 500
-region = "bottom_non_empty_lines(3)"
+# The animated composer fills its two otherwise blank padding rows.
+region = "bottom_non_empty_lines(5)"
 visible_working = true
 line_regex = ['^[•◦]\s+Working \([^)]*esc to interrupt\)(?: · .*)?$']
-not = [{ contains = ["■ Conversation interrupted"] }]
+not = [
+  { contains = ["■ Conversation interrupted"] },
+  { regex = ['(?ms)^[•◦]\s+Working [^\r\n]*\r?\n.*^[•◦■✗✓]'] },
+]
 
 [[rules]]
 id = "osc_title_idle"

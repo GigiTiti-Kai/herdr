@@ -1353,6 +1353,40 @@ fn clicking_detail_rows_folds_workspace_and_space_key_unfolds() {
     assert!(!state.folded_workspaces.contains("ws_1"));
 }
 
+#[test]
+fn auto_named_worktree_branch_is_hidden_but_custom_branch_shows() {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.spaces.rows = vec![
+        vec![crate::config::SpaceSidebarToken::Workspace],
+        vec![crate::config::SpaceSidebarToken::Worktree],
+        vec![crate::config::SpaceSidebarToken::Branch],
+    ];
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    snapshot.workspaces[0].label = "dotfiles".into();
+    snapshot.workspaces[0].worktree_name = Some("wt-fold".into());
+    snapshot.workspaces[0].branch = Some("worktree-wt-fold".into());
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 20).expect("composed frame");
+    let text = frame_text(&frame);
+    assert!(text.contains("wt:wt-fold"));
+    assert!(!text.contains("worktree-wt-fold"));
+    assert_eq!(state.hits.workspaces[0].rect.height, 2);
+
+    let mut replacement = (**state.snapshot.as_ref().expect("snapshot")).clone();
+    replacement.revision = 2;
+    replacement.workspaces[0].branch = Some("feat/real-work".into());
+    let mut replacement_surface = surface();
+    replacement_surface.projection_revision = 2;
+    state.set_snapshot(Box::new(replacement));
+    state.set_pane_surface(replacement_surface);
+    let frame = state.compose(106, 20).expect("composed frame");
+    let text = frame_text(&frame);
+    assert!(text.contains("feat/real-work"));
+    assert_eq!(state.hits.workspaces[0].rect.height, 3);
+}
+
 fn frame_text(frame: &crate::protocol::FrameData) -> String {
     frame
         .cells

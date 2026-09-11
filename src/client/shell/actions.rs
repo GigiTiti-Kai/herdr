@@ -147,6 +147,17 @@ impl ClientShellState {
                     }
                     return;
                 }
+                if matches!(
+                    action,
+                    crate::input::KeybindAction::ScrollToTop
+                        | crate::input::KeybindAction::ScrollToBottom
+                ) {
+                    self.scroll_focused_pane_to_edge(
+                        action == crate::input::KeybindAction::ScrollToTop,
+                        outcome,
+                    );
+                    return;
+                }
                 if self.handle_endpoint_navigation(action, outcome) {
                     return;
                 }
@@ -895,6 +906,30 @@ impl ClientShellState {
             Err(_) => true,
         };
         (repaint, Vec::new())
+    }
+
+    /// Jump the focused pane to the top of its scrollback or back to the live
+    /// bottom. Reuses the mouse scroll pipeline, so the request coalesces with
+    /// in-flight wheel and scrollbar scrolls.
+    fn scroll_focused_pane_to_edge(&mut self, top: bool, outcome: &mut ClientShellInput) {
+        let Some(pane_id) = self.focused_pane_id() else {
+            return;
+        };
+        let Some(metrics) = self
+            .hits
+            .panes
+            .iter()
+            .find(|hit| hit.pane_id == pane_id)
+            .and_then(|hit| hit.scroll)
+        else {
+            return;
+        };
+        let offset = if top {
+            metrics.max_offset_from_bottom
+        } else {
+            0
+        };
+        self.push_pane_scroll_offset(pane_id, offset, outcome);
     }
 
     pub(super) fn endpoint_method_for_action(

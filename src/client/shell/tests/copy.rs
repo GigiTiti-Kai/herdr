@@ -1238,3 +1238,56 @@ fn word_selection_result_survives_focus_snapshot_lag() {
         .as_ref()
         .is_some_and(crate::selection::Selection::is_visible));
 }
+
+#[test]
+fn scroll_to_top_and_bottom_bindings_request_edge_offsets() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: 20,
+        viewport_rows: 2,
+    });
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+
+    let mut top = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ScrollToTop),
+        &mut top,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &top.actions[..] else {
+        panic!("scroll_to_top should request one pane.scroll");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PaneScroll(params)
+            if params.pane_id == "pane_1" && params.offset_from_bottom == 20
+    ));
+    let top_request_id = request.id.clone();
+    state.handle_endpoint_result("boot-1", &top_request_id, Ok(pane_scroll_result(20, 20, 2)));
+    let mut pane_surface = surface();
+    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 20,
+        max_offset_from_bottom: 20,
+        viewport_rows: 2,
+    });
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("composed frame");
+
+    let mut bottom = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ScrollToBottom),
+        &mut bottom,
+    );
+    assert!(matches!(
+        &bottom.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                &request.method,
+                crate::api::schema::Method::PaneScroll(params)
+                    if params.offset_from_bottom == 0
+            )
+    ));
+}

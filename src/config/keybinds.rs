@@ -1270,6 +1270,8 @@ pub(crate) fn parse_key_combo(s: &str) -> Option<KeyCombo> {
         "right" => KeyCode::Right,
         "up" => KeyCode::Up,
         "down" => KeyCode::Down,
+        "home" => KeyCode::Home,
+        "end" => KeyCode::End,
         "minus" => KeyCode::Char('-'),
         "comma" => KeyCode::Char(','),
         "period" => KeyCode::Char('.'),
@@ -1546,6 +1548,22 @@ prefix = "ö"
         assert_eq!(
             parse_key_combo("shift+tab"),
             Some((KeyCode::BackTab, KeyModifiers::empty()))
+        );
+    }
+
+    #[test]
+    fn parse_home_and_end_with_modifiers() {
+        assert_eq!(
+            parse_key_combo("ctrl+shift+home"),
+            Some((KeyCode::Home, KeyModifiers::CONTROL | KeyModifiers::SHIFT))
+        );
+        assert_eq!(
+            parse_key_combo("ctrl+end"),
+            Some((KeyCode::End, KeyModifiers::CONTROL))
+        );
+        assert_eq!(
+            format_key_combo((KeyCode::Home, KeyModifiers::CONTROL | KeyModifiers::SHIFT)),
+            "ctrl+shift+home"
         );
     }
 

@@ -22,8 +22,18 @@ shares the default socket with the fork server.
 - `fork/build.sh` — build with `HERDR_BUILD_CHANNEL=fork`, install to `~/.local/bin/herdr`.
 - `fork/sync.sh [<ref>]` — fetch upstream, ff master to the newest `v*` tag (or `<ref>`),
   merge into dev, push dev, build. Resolve conflicts by hand if the merge stops.
-- After either: from a terminal **outside** herdr, `herdr server stop && herdr`.
-  Layout is restored from `~/.config/herdr/session.json`.
+- After either, switch the running server to the new binary. Two ways:
+  - From a terminal **outside** herdr: `herdr server stop && herdr`. Kills every
+    pane process. Layout is restored from `~/.config/herdr/session.json`.
+  - From **inside** herdr (panes and their processes survive):
+    `herdr server live-handoff --import-exe /home/hadas/.local/bin/herdr`.
+    `--import-exe` is required: `build.sh` installs with `install(1)`, which
+    unlinks the old file, so the running server's `/proc/self/exe` is
+    `(deleted)` and the default (`current_exe()`) cannot be spawned. The TUI
+    client disconnects once even on success; reattach with `herdr` from a
+    terminal outside herdr. In-flight CLI waits and subscriptions are dropped.
+    Verified 2026-09-13 on a throwaway named session, not yet on the default
+    session.
 
 ## Refreshing herdr-upstream
 

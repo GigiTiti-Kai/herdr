@@ -704,6 +704,18 @@
           "description": "Enter keyboard copy mode for the focused pane."
         },
         {
+          "key": "keys.scroll_to_top",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Scroll the focused pane to the top of its scrollback. Unset by default."
+        },
+        {
+          "key": "keys.scroll_to_bottom",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Scroll the focused pane back to the live bottom. Unset by default."
+        },
+        {
           "key": "keys.focus_pane_left",
           "type": "keybinding",
           "default": "\"prefix+h\"",

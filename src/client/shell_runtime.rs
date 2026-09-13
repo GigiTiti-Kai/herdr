@@ -559,11 +559,15 @@ pub(super) fn install_client_shell_snapshot(
     let generation = connection.generation;
     let project_snapshot =
         !projection_pending && endpoints.active_id() == endpoint_id && connection.surface_active;
+    let mut replay_host_theme = false;
     let (composed, resize, graphics_cleanup) = if let Some(shell) = &mut state.shell {
         let waits_for_selected_surface = projection_pending
             || (endpoints.active_id() == endpoint_id
                 && !project_snapshot
                 && shell.has_presented_surface());
+        // Host theme replies that arrived before this endpoint had a snapshot were
+        // only recorded, never sent; deliver them once the endpoint is online.
+        replay_host_theme = project_snapshot && !shell.endpoint_has_snapshot(endpoint_id);
         let previous_size = shell.surface_size(state.reported_size.0, state.reported_size.1);
         if !waits_for_selected_surface {
             shell.set_endpoint_status(endpoint_id, endpoint::ClientEndpointStatus::Online);
@@ -600,6 +604,9 @@ pub(super) fn install_client_shell_snapshot(
     state.present_graphics(&graphics_cleanup);
     if let Some(resize) = resize {
         endpoints.send_to(endpoint_id, &resize);
+    }
+    if replay_host_theme {
+        state.replay_host_theme(endpoints, endpoint_id);
     }
     if let Some(frame) = composed {
         if projection_pending {

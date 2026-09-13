@@ -532,7 +532,9 @@ fn restore_tab(
         let was_imported = imported_runtime.is_some();
         // Reported metadata describes the process that was in the pane. Keep it
         // when that process survives (handoff) or its session is resumed; a
-        // pane that comes back as a plain shell starts without it.
+        // pane that comes back as a plain shell starts without it. Hook
+        // authority is not carried over, so reports guarded by
+        // `applies_to_source` stay hidden until the integration posts again.
         let saved_agent_metadata = saved_pane
             .filter(|_| was_imported || startup.restore_plan.is_some())
             .map(|pane| pane.agent_metadata.clone())
@@ -553,7 +555,11 @@ fn restore_tab(
                 terminal.set_persisted_agent_session(session);
             }
             for metadata in saved_agent_metadata {
-                let _ = terminal.set_agent_metadata(metadata.into_report());
+                // The resumed agent is a new process, so its hook sequence
+                // starts over, exactly as after any process exit.
+                let mut report = metadata.into_report();
+                report.seq = None;
+                let _ = terminal.set_agent_metadata(report);
             }
             match (saved_agent_name, saved_managed_agent) {
                 (Some(agent_name), Some(agent)) => {
@@ -1835,9 +1841,10 @@ mod tests {
             presentation.state_labels.get("idle").map(String::as_str),
             Some("idle · claude")
         );
-        // The restored sequence still gates stale reports and admits newer ones.
-        assert!(!terminal.metadata_report_sequence_is_fresh("user:labels", Some(7)));
-        assert!(terminal.metadata_report_sequence_is_fresh("user:labels", Some(8)));
+        // The resumed agent is a new process: its sequence starts over, so a
+        // hook that counts from one is not muted by the saved sequence.
+        assert!(terminal.metadata_report_sequence_is_fresh("user:labels", Some(1)));
+        assert!(terminal.metadata_report_sequence_is_fresh("user:labels", Some(7)));
     }
 
     #[tokio::test]

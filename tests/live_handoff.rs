@@ -2137,7 +2137,24 @@ fn live_handoff_preserves_reported_pane_metadata() {
         "{pane}"
     );
 
-    // A later report from the same source still wins on sequence.
+    // The sequence survived too: a replay of the old report is rejected...
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:pane:metadata:stale",
+            "method": "pane.report_metadata",
+            "params": {
+                "pane_id": pane_id,
+                "source": "user:labels",
+                "seq": 1,
+                "state_labels": {"idle": "idle · stale"}
+            }
+        }),
+    ));
+    let pane = pane_info(&api_socket, &pane_id);
+    assert_eq!(pane["state_labels"]["idle"], "idle · claude", "{pane}");
+
+    // ...while a later report from the same source still wins.
     assert_ok(request(
         &api_socket,
         serde_json::json!({

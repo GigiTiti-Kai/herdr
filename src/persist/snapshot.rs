@@ -400,7 +400,22 @@ fn capture_tab(
                 let mut metadata = terminal
                     .agent_metadata
                     .values()
-                    .filter(|metadata| metadata.ttl.is_none())
+                    .filter(|metadata| {
+                        metadata.ttl.is_none()
+                            && (metadata.title.is_some()
+                                || metadata.display_agent.is_some()
+                                || !metadata.state_labels.is_empty())
+                    })
+                    .collect::<Vec<_>>();
+                // Replay order decides which source's title wins on restore,
+                // so keep the original report order.
+                metadata.sort_by(|left, right| {
+                    left.reported_at
+                        .cmp(&right.reported_at)
+                        .then_with(|| left.source.cmp(&right.source))
+                });
+                metadata
+                    .into_iter()
                     .map(|metadata| PaneAgentMetadataSnapshot {
                         source: metadata.source.clone(),
                         agent_label: metadata.agent_label.clone(),
@@ -410,9 +425,7 @@ fn capture_tab(
                         state_labels: metadata.state_labels.clone(),
                         seq: terminal.metadata_report_sequence(&metadata.source),
                     })
-                    .collect::<Vec<_>>();
-                metadata.sort_by(|left, right| left.source.cmp(&right.source));
-                metadata
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
         panes.insert(

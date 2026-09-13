@@ -2187,7 +2187,17 @@ impl PaneRuntime {
         let pane_terminal = GhosttyPaneTerminal::new(terminal, response_tx.clone())?;
         pane_terminal.apply_host_terminal_theme(host_terminal_theme);
         let _ = pane_terminal.apply_host_terminal_appearance(host_terminal_appearance);
+        // A seeded title never passes through the PTY reader, so flag the pane
+        // ourselves; otherwise app-level `TerminalState.terminal_title` (and the
+        // sidebar rows built from it) stays empty until the process re-emits one.
+        // A seeded title never passes through the PTY reader, so flag the pane
+        // ourselves; otherwise app-level `TerminalState.terminal_title` (and the
+        // sidebar rows built from it) stays empty until the process re-emits one.
+        let seeded_title = terminal_title.is_some();
         pane_terminal.seed_terminal_title(terminal_title);
+        if seeded_title && render_dirty.request_terminal_title(pane_id) {
+            render_notify.notify_one();
+        }
         if let Some(input_state) = input_state {
             pane_terminal.seed_handoff_input_state(input_state);
         }

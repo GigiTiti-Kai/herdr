@@ -1159,6 +1159,82 @@ pathlib.Path({received:?}).write_text(data.hex())
     cleanup_test_base(&base);
 }
 
+fn wait_for_pane_terminal_title(socket_path: &Path, pane_id: &str, expected: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_response = serde_json::Value::Null;
+    while Instant::now() < deadline {
+        let response = request(
+            socket_path,
+            serde_json::json!({
+                "id": "test:pane:get",
+                "method": "pane.get",
+                "params": {"pane_id": pane_id}
+            }),
+        );
+        if response["result"]["pane"]["terminal_title_stripped"].as_str() == Some(expected) {
+            return;
+        }
+        last_response = response;
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!(
+        "pane.get did not report terminal title {expected:?}; last response was {last_response}"
+    );
+}
+
+#[test]
+fn live_handoff_preserves_terminal_title_in_pane_info() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+
+    let spawned = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+
+    let created = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:workspace:create",
+            "method": "workspace.create",
+            "params": {"cwd": "/tmp", "focus": true}
+        }),
+    );
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // Emit an OSC 0 title once, like an agent does at startup, then go quiet.
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:pane:title",
+            "method": "pane.send_input",
+            "params": {"pane_id": pane_id, "text": "printf '\\033]0;handoff-title\\007'; sleep 30", "keys": ["Enter"]}
+        }),
+    ));
+    wait_for_pane_terminal_title(&api_socket, &pane_id, "handoff-title");
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({"id":"test:handoff","method":"server.live_handoff","params":{}}),
+    ));
+    drop(spawned);
+    wait_for_api(&api_socket, Duration::from_secs(10));
+
+    // The process never re-emits its title, so the imported server must
+    // surface the carried-over title on its own.
+    wait_for_pane_terminal_title(&api_socket, &pane_id, "handoff-title");
+
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
+    );
+    cleanup_test_base(&base);
+}
+
 #[test]
 fn live_handoff_preserves_modify_other_keys_for_client_input() {
     let _lock = test_lock();

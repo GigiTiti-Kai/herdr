@@ -218,6 +218,38 @@ instead. Exit the shell to close the popup and restore the tiled terminal view.
 
 `type = "pane"` opens a temporary zoomed pane and closes it when the command exits.
 
+`type = "tab"` and `type = "split"` mirror the built-in new-tab and split
+actions but run the command instead of the default shell. They create regular,
+persistent panes that follow the `[terminal] new_cwd` policy. Session restore
+keeps the pane layout but reopens these panes with the default shell.
+`type = "split"` accepts an optional `direction` of `"right"` (default) or
+`"down"`. On Unix and macOS, use `exec` so the command replaces the wrapper
+shell, for example to open an alternate shell without changing
+`default_shell`; on Windows, use a plain shell command such as
+`command = "pwsh.exe -NoLogo"` instead:
+
+```toml
+[[keys.command]]
+key = "prefix+ctrl+c"
+type = "tab"
+command = "exec pwsh"
+description = "new pwsh tab"
+
+[[keys.command]]
+key = "prefix+ctrl+v"
+type = "split"
+direction = "right"
+command = "exec pwsh"
+description = "split pwsh right"
+
+[[keys.command]]
+key = "prefix+ctrl+d"
+type = "split"
+direction = "down"
+command = "exec pwsh"
+description = "split pwsh down"
+```
+
 `type = "shell"` runs detached in the background.
 
 `type = "plugin_action"` invokes an installed plugin action id. Use the

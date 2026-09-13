@@ -107,6 +107,45 @@ pub struct PaneSnapshot {
     pub agent_session: Option<PaneAgentSessionSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_argv: Option<Vec<String>>,
+    /// Presentation metadata posted through `pane.report_metadata` (sidebar
+    /// state labels, titles). Reports with a TTL are transient and not kept.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_metadata: Vec<PaneAgentMetadataSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneAgentMetadataSnapshot {
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applies_to_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub state_labels: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
+}
+
+impl PaneAgentMetadataSnapshot {
+    pub(crate) fn into_report(self) -> crate::terminal::AgentMetadataReport {
+        crate::terminal::AgentMetadataReport {
+            source: self.source,
+            agent_label: self.agent_label,
+            applies_to_source: self.applies_to_source,
+            title: self.title,
+            display_agent: self.display_agent,
+            state_labels: self.state_labels,
+            clear_title: false,
+            clear_display_agent: false,
+            clear_state_labels: false,
+            ttl: None,
+            seq: self.seq,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -356,6 +395,26 @@ fn capture_tab(
                     value: session.session_ref.value.clone(),
                 })
         });
+        let agent_metadata = terminal
+            .map(|terminal| {
+                let mut metadata = terminal
+                    .agent_metadata
+                    .values()
+                    .filter(|metadata| metadata.ttl.is_none())
+                    .map(|metadata| PaneAgentMetadataSnapshot {
+                        source: metadata.source.clone(),
+                        agent_label: metadata.agent_label.clone(),
+                        applies_to_source: metadata.applies_to_source.clone(),
+                        title: metadata.title.clone(),
+                        display_agent: metadata.display_agent.clone(),
+                        state_labels: metadata.state_labels.clone(),
+                        seq: terminal.metadata_report_sequence(&metadata.source),
+                    })
+                    .collect::<Vec<_>>();
+                metadata.sort_by(|left, right| left.source.cmp(&right.source));
+                metadata
+            })
+            .unwrap_or_default();
         panes.insert(
             id.raw(),
             PaneSnapshot {
@@ -365,6 +424,7 @@ fn capture_tab(
                 managed_agent_kind,
                 agent_session,
                 launch_argv,
+                agent_metadata,
             },
         );
     }
@@ -642,6 +702,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                agent_metadata: Vec::new(),
             },
         );
         panes.insert(
@@ -653,6 +714,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                agent_metadata: Vec::new(),
             },
         );
 
@@ -1206,6 +1268,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                agent_metadata: Vec::new(),
             },
         );
         panes.insert(
@@ -1219,6 +1282,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                agent_metadata: Vec::new(),
             },
         );
 
@@ -1262,5 +1326,46 @@ mod tests {
             restored.workspaces[0].tabs[0].panes[&0].cwd,
             PathBuf::from("/tmp/this-directory-does-not-exist-for-herdr-test")
         );
+    }
+
+    #[test]
+    fn capture_contract_tracks_reported_pane_metadata_without_ttl() {
+        let mut state = state_with_workspaces(&["one"]);
+        let root = state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = state.workspaces[0].tabs[0].panes[&root]
+            .attached_terminal_id
+            .clone();
+        let terminal = state.terminals.get_mut(&terminal_id).unwrap();
+        let report = |source: &str, label: &str, ttl| crate::terminal::AgentMetadataReport {
+            source: source.into(),
+            agent_label: None,
+            applies_to_source: None,
+            title: Some("Refactor auth".into()),
+            display_agent: None,
+            state_labels: HashMap::from([("idle".into(), label.into())]),
+            clear_title: false,
+            clear_display_agent: false,
+            clear_state_labels: false,
+            ttl,
+            seq: Some(7),
+        };
+        terminal.set_agent_metadata(report("user:labels", "idle · claude", None));
+        terminal.set_agent_metadata(report(
+            "user:transient",
+            "gone soon",
+            Some(std::time::Duration::from_secs(60)),
+        ));
+
+        let snapshot = capture_from_state(&state);
+        let metadata = &snapshot.workspaces[0].tabs[0].panes[&root.raw()].agent_metadata;
+
+        assert_eq!(metadata.len(), 1, "{metadata:?}");
+        assert_eq!(metadata[0].source, "user:labels");
+        assert_eq!(metadata[0].title.as_deref(), Some("Refactor auth"));
+        assert_eq!(
+            metadata[0].state_labels.get("idle").map(String::as_str),
+            Some("idle · claude")
+        );
+        assert_eq!(metadata[0].seq, Some(7));
     }
 }

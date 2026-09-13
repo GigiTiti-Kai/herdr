@@ -7,7 +7,7 @@ pub mod support;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -1964,4 +1964,181 @@ fn client_receives_notify_on_agent_state_change() {
     );
 
     cleanup_spawned_herdr(spawned, base);
+}
+
+fn wait_for_pane_output(socket_path: &PathBuf, pane_id: &str, needle: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let mut last_text = String::new();
+    while Instant::now() < deadline {
+        let request = serde_json::json!({
+            "id": "pane-output-read",
+            "method": "pane.read",
+            "params": {
+                "pane_id": pane_id,
+                "source": "visible",
+                "lines": 40,
+                "format": "text",
+                "strip_ansi": true
+            }
+        });
+        let response = send_json_request(socket_path, &request.to_string());
+        last_text = response["result"]["read"]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        if last_text.contains(needle) {
+            return last_text;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("pane output did not contain {needle:?}; last text was {last_text:?}");
+}
+
+/// A host background reply that reaches the client before the server's first
+/// snapshot must still reach the server: panes answer OSC 11 with it, which is
+/// what TUIs such as Codex use to pick their composer background.
+#[test]
+fn host_theme_reply_before_first_snapshot_still_reaches_panes() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    let pane_id = create_host_theme_workspace(&api_socket, &base);
+    let probe = write_osc11_probe_script(&base);
+
+    let client = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    // The outer terminal answers the client's OSC 11 query. Writing the reply
+    // before the client even asks makes it arrive ahead of the first snapshot.
+    // The writer stays alive until the end: dropping it sends newline + EOF
+    // into the client, which would reach the pane shell as Enter + Ctrl-D.
+    let mut writer = client
+        ._master
+        .as_ref()
+        .expect("client shell PTY")
+        .take_writer()
+        .expect("client shell writer");
+    writer
+        .write_all(HOST_BACKGROUND_REPLY)
+        .expect("write host background reply");
+    let output = spawn_pty_drain(
+        client
+            ._master
+            .as_ref()
+            .expect("client shell PTY")
+            .try_clone_reader()
+            .expect("clone client shell reader"),
+    );
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
+            read_output(&output).contains("host-theme")
+        }),
+        "client shell should attach; output: {:?}",
+        read_output(&output)
+    );
+
+    send_pane_shell_command(&api_socket, &pane_id, &format!("bash {}", probe.display()));
+    let text = wait_for_pane_output(&api_socket, &pane_id, ":END");
+    assert!(
+        text.contains("rgb:1e1e/1e1e/2e2e"),
+        "pane should answer OSC 11 with the host background; output: {text:?}"
+    );
+
+    drop(client);
+    drop(writer);
+    cleanup_spawned_herdr(server, base);
+}
+
+/// Control for the test above: the same reply arriving after the client has
+/// its first snapshot reaches panes.
+#[test]
+fn host_theme_reply_after_first_snapshot_reaches_panes() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+
+    let pane_id = create_host_theme_workspace(&api_socket, &base);
+    let probe = write_osc11_probe_script(&base);
+
+    let client = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let mut writer = client
+        ._master
+        .as_ref()
+        .expect("client shell PTY")
+        .take_writer()
+        .expect("client shell writer");
+    let output = spawn_pty_drain(
+        client
+            ._master
+            .as_ref()
+            .expect("client shell PTY")
+            .try_clone_reader()
+            .expect("clone client shell reader"),
+    );
+    assert!(
+        wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
+            read_output(&output).contains("host-theme")
+        }),
+        "client shell should attach; output: {:?}",
+        read_output(&output)
+    );
+    writer
+        .write_all(HOST_BACKGROUND_REPLY)
+        .expect("write host background reply");
+    thread::sleep(Duration::from_millis(300));
+
+    send_pane_shell_command(&api_socket, &pane_id, &format!("bash {}", probe.display()));
+    let text = wait_for_pane_output(&api_socket, &pane_id, ":END");
+    assert!(
+        text.contains("rgb:1e1e/1e1e/2e2e"),
+        "pane should answer OSC 11 with the host background; output: {text:?}"
+    );
+
+    drop(client);
+    drop(writer);
+    cleanup_spawned_herdr(server, base);
+}
+
+const HOST_BACKGROUND_REPLY: &[u8] = b"\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\";
+
+fn create_host_theme_workspace(api_socket: &PathBuf, cwd: &Path) -> String {
+    let created = send_json_request(
+        api_socket,
+        &serde_json::json!({
+            "id": "host-theme-workspace",
+            "method": "workspace.create",
+            "params": {"cwd": cwd, "focus": true, "label": "host-theme"},
+        })
+        .to_string(),
+    );
+    assert_eq!(created["result"]["type"], "workspace_created", "{created}");
+    created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .expect("root pane id")
+        .to_string()
+}
+
+/// Asks the pane terminal for its default background and echoes the reply as
+/// plain text (ESC replaced) so the pane does not re-interpret it.
+fn write_osc11_probe_script(base: &Path) -> PathBuf {
+    let probe = base.join("osc11-probe.sh");
+    fs::write(
+        &probe,
+        "printf '\\033]11;?\\033\\\\' > /dev/tty\nIFS= read -r -t 3 -N 80 r < /dev/tty\nprintf 'GOT:%s:END\\n' \"$r\" | tr '\\033' _\n",
+    )
+    .expect("write probe script");
+    probe
 }

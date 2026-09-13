@@ -1736,6 +1736,10 @@ impl App {
         });
 
         if presentation_requested {
+            if ttl.is_none() {
+                // Persisted with the pane snapshot, so the next save must see it.
+                self.state.mark_session_dirty();
+            }
             self.handle_internal_event(crate::events::AppEvent::HookMetadataReported {
                 pane_id,
                 source,

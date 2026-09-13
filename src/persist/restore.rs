@@ -530,6 +530,15 @@ fn restore_tab(
             .unwrap_or_default();
         let imported_runtime = old_pane_id.and_then(|old_id| imported_panes.remove(&old_id));
         let was_imported = imported_runtime.is_some();
+        // Reported metadata describes the process that was in the pane. Keep it
+        // when that process survives (handoff) or its session is resumed; a
+        // pane that comes back as a plain shell starts without it. Hook
+        // authority is not carried over, so reports guarded by
+        // `applies_to_source` stay hidden until the integration posts again.
+        let saved_agent_metadata = saved_pane
+            .filter(|_| was_imported || startup.restore_plan.is_some())
+            .map(|pane| pane.agent_metadata.clone())
+            .unwrap_or_default();
         let pending_native_agent_restore = if was_imported {
             None
         } else {
@@ -544,6 +553,13 @@ fn restore_tab(
             }
             if let Some(session) = restored_agent_session {
                 terminal.set_persisted_agent_session(session);
+            }
+            for metadata in saved_agent_metadata {
+                // The resumed agent is a new process, so its hook sequence
+                // starts over, exactly as after any process exit.
+                let mut report = metadata.into_report();
+                report.seq = None;
+                let _ = terminal.set_agent_metadata(report);
             }
             match (saved_agent_name, saved_managed_agent) {
                 (Some(agent_name), Some(agent)) => {
@@ -641,6 +657,9 @@ fn restore_tab(
                 }
                 if let Some(session) = restored_agent_session {
                     terminal.set_persisted_agent_session(session);
+                }
+                for metadata in saved_agent_metadata {
+                    let _ = terminal.set_agent_metadata(metadata.into_report());
                 }
                 match (saved_agent_name, saved_managed_agent) {
                     (Some(agent_name), Some(agent)) if was_imported => {
@@ -1200,6 +1219,7 @@ mod tests {
                                 value: "opencode-session".into(),
                             }),
                             launch_argv: None,
+                            agent_metadata: Vec::new(),
                         },
                     )]),
                     zoomed: false,
@@ -1281,6 +1301,7 @@ mod tests {
                                 managed_agent_kind: None,
                                 agent_session: None,
                                 launch_argv: None,
+                                agent_metadata: Vec::new(),
                             },
                         ),
                         (
@@ -1292,6 +1313,7 @@ mod tests {
                                 managed_agent_kind: None,
                                 agent_session: None,
                                 launch_argv: None,
+                                agent_metadata: Vec::new(),
                             },
                         ),
                     ]),
@@ -1345,6 +1367,7 @@ mod tests {
                     managed_agent_kind: None,
                     agent_session: None,
                     launch_argv: None,
+                    agent_metadata: Vec::new(),
                 },
             )
         };
@@ -1360,6 +1383,7 @@ mod tests {
                 value: "codex-session".into(),
             }),
             launch_argv: None,
+            agent_metadata: Vec::new(),
         };
         let snapshot = SessionSnapshot {
             version: super::super::snapshot::SNAPSHOT_VERSION,
@@ -1511,6 +1535,7 @@ mod tests {
                                 value: "codex-session".into(),
                             }),
                             launch_argv: None,
+                            agent_metadata: Vec::new(),
                         },
                     )]),
                     zoomed: false,
@@ -1672,6 +1697,7 @@ mod tests {
                 managed_agent_kind: None,
                 agent_session: None,
                 launch_argv: None,
+                agent_metadata: Vec::new(),
             },
         );
         let history = SessionHistorySnapshot {
@@ -1720,5 +1746,130 @@ mod tests {
             collapsed_space_keys: Default::default(),
         };
         (snapshot, history)
+    }
+
+    fn metadata_snapshot_pane(
+        cwd: PathBuf,
+        agent_session: Option<super::super::snapshot::PaneAgentSessionSnapshot>,
+    ) -> SessionSnapshot {
+        SessionSnapshot {
+            version: super::super::snapshot::SNAPSHOT_VERSION,
+            workspaces: vec![WorkspaceSnapshot {
+                id: Some("workspace".into()),
+                custom_name: None,
+                identity_cwd: cwd.clone(),
+                worktree_space: None,
+                public_pane_numbers: HashMap::new(),
+                next_public_pane_number: 0,
+                public_tab_numbers: Vec::new(),
+                next_public_tab_number: 0,
+                tabs: vec![TabSnapshot {
+                    custom_name: None,
+                    layout: LayoutSnapshot::Pane(0),
+                    panes: HashMap::from([(
+                        0,
+                        super::super::snapshot::PaneSnapshot {
+                            cwd,
+                            label: None,
+                            agent_name: None,
+                            managed_agent_kind: None,
+                            agent_session,
+                            launch_argv: None,
+                            agent_metadata: vec![
+                                super::super::snapshot::PaneAgentMetadataSnapshot {
+                                    source: "user:labels".into(),
+                                    agent_label: None,
+                                    applies_to_source: None,
+                                    title: Some("Refactor auth".into()),
+                                    display_agent: None,
+                                    state_labels: HashMap::from([(
+                                        "idle".into(),
+                                        "idle · claude".into(),
+                                    )]),
+                                    seq: Some(7),
+                                },
+                            ],
+                        },
+                    )]),
+                    zoomed: false,
+                    focused: Some(0),
+                    root_pane: Some(0),
+                }],
+                active_tab: 0,
+            }],
+            active: Some(0),
+            selected: 0,
+            sidebar_width: None,
+            sidebar_section_split: None,
+            collapsed_space_keys: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn native_agent_restore_carries_reported_pane_metadata() {
+        let cwd = std::env::current_dir().unwrap();
+        let snapshot = metadata_snapshot_pane(
+            cwd,
+            Some(super::super::snapshot::PaneAgentSessionSnapshot {
+                source: "herdr:codex".into(),
+                agent: "codex".into(),
+                kind: crate::agent_resume::AgentSessionRefKind::Id,
+                value: "codex-session".into(),
+            }),
+        );
+        let (events, _event_rx) = mpsc::channel(4);
+
+        let (_workspaces, terminals, _runtimes) = restore(
+            &snapshot,
+            None,
+            24,
+            80,
+            0,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            true,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+
+        let terminal = terminals.values().next().expect("restored terminal");
+        assert!(terminal.pending_agent_resume_plan.is_some());
+        let presentation = terminal.effective_presentation();
+        assert_eq!(presentation.title.as_deref(), Some("Refactor auth"));
+        assert_eq!(
+            presentation.state_labels.get("idle").map(String::as_str),
+            Some("idle · claude")
+        );
+        // The resumed agent is a new process: its sequence starts over, so a
+        // hook that counts from one is not muted by the saved sequence.
+        assert!(terminal.metadata_report_sequence_is_fresh("user:labels", Some(1)));
+        assert!(terminal.metadata_report_sequence_is_fresh("user:labels", Some(7)));
+    }
+
+    #[tokio::test]
+    async fn cold_restore_of_plain_shell_pane_drops_reported_pane_metadata() {
+        let cwd = std::env::current_dir().unwrap();
+        let snapshot = metadata_snapshot_pane(cwd, None);
+        let (events, _event_rx) = mpsc::channel(4);
+
+        let (_workspaces, terminals, _runtimes) = restore(
+            &snapshot,
+            None,
+            24,
+            80,
+            0,
+            test_restore_shell(),
+            crate::config::ShellModeConfig::NonLogin,
+            true,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        );
+
+        let terminal = terminals.values().next().expect("restored terminal");
+        let presentation = terminal.effective_presentation();
+        assert_eq!(presentation.title, None);
+        assert!(presentation.state_labels.is_empty());
     }
 }

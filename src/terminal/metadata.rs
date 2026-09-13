@@ -54,6 +54,10 @@ impl EffectivePresentation {
 }
 
 impl TerminalState {
+    pub(crate) fn metadata_report_sequence(&self, source: &str) -> Option<u64> {
+        self.metadata_report_sequences.get(source).copied()
+    }
+
     pub(crate) fn metadata_report_sequence_is_fresh(&self, source: &str, seq: Option<u64>) -> bool {
         crate::metadata_tokens::sequence_is_fresh(&self.metadata_report_sequences, source, seq)
     }

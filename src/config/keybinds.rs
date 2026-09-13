@@ -83,6 +83,17 @@ pub enum CommandKeybindType {
     Pane,
     Popup,
     PluginAction,
+    Tab,
+    Split,
+}
+
+/// Split placement for `type = "split"` custom commands. Default: "right".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandSplitDirection {
+    #[default]
+    Right,
+    Down,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -101,6 +112,8 @@ pub struct CommandKeybindConfig {
     pub width: Option<PopupSize>,
     /// Optional popup height as cells or a percentage string when type = "popup".
     pub height: Option<PopupSize>,
+    /// Optional split placement when type = "split". Default: "right".
+    pub direction: Option<CommandSplitDirection>,
 }
 
 impl Default for CommandKeybindConfig {
@@ -112,6 +125,7 @@ impl Default for CommandKeybindConfig {
             description: None,
             width: None,
             height: None,
+            direction: None,
         }
     }
 }
@@ -122,6 +136,10 @@ pub enum CustomCommandAction {
     Pane,
     Popup,
     PluginAction,
+    /// New tab whose root pane runs the command.
+    Tab,
+    /// Regular split of the focused pane running the command.
+    Split,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -301,6 +319,8 @@ pub struct CustomCommandKeybind {
     pub description: Option<String>,
     pub width: Option<PopupSize>,
     pub height: Option<PopupSize>,
+    /// Split placement; only meaningful for `CustomCommandAction::Split`.
+    pub direction: CommandSplitDirection,
 }
 
 /// Parsed keybinds for Herdr actions.
@@ -787,6 +807,20 @@ fn append_custom_command_bindings(
             CommandKeybindType::Pane => CustomCommandAction::Pane,
             CommandKeybindType::Popup => CustomCommandAction::Popup,
             CommandKeybindType::PluginAction => CustomCommandAction::PluginAction,
+            CommandKeybindType::Tab => CustomCommandAction::Tab,
+            CommandKeybindType::Split => CustomCommandAction::Split,
+        };
+        let direction = if action == CustomCommandAction::Split {
+            command.direction.unwrap_or_default()
+        } else {
+            if command.direction.is_some() {
+                let diag = format!(
+                    "split direction on non-split custom command: keys.command[{index}]; ignoring direction"
+                );
+                warn!(message = %diag, "config diagnostic");
+                diagnostics.push(diag);
+            }
+            CommandSplitDirection::default()
         };
         let (width, height) = if action == CustomCommandAction::Popup {
             (command.width, command.height)
@@ -809,6 +843,7 @@ fn append_custom_command_bindings(
             description: command.description.clone(),
             width,
             height,
+            direction,
         });
     }
 }
@@ -2309,6 +2344,69 @@ height = "80%"
             keybinds.custom_commands[0].height,
             Some(PopupSize::Percent(80))
         );
+    }
+
+    #[test]
+    fn custom_tab_and_split_commands_parse() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.command]]
+key = "prefix+ctrl+c"
+command = "exec pwsh.exe"
+type = "tab"
+
+[[keys.command]]
+key = "prefix+ctrl+v"
+command = "exec pwsh.exe"
+type = "split"
+
+[[keys.command]]
+key = "prefix+ctrl+d"
+command = "exec pwsh.exe"
+type = "split"
+direction = "down"
+"#,
+        )
+        .unwrap();
+        let keybinds = config.keybinds();
+        assert_eq!(keybinds.custom_commands.len(), 3);
+        assert_eq!(keybinds.custom_commands[0].action, CustomCommandAction::Tab);
+        assert_eq!(
+            keybinds.custom_commands[1].action,
+            CustomCommandAction::Split
+        );
+        assert_eq!(
+            keybinds.custom_commands[1].direction,
+            CommandSplitDirection::Right
+        );
+        assert_eq!(
+            keybinds.custom_commands[2].direction,
+            CommandSplitDirection::Down
+        );
+    }
+
+    #[test]
+    fn non_split_custom_command_ignores_direction_with_diagnostic() {
+        let config: Config = toml::from_str(
+            r#"
+[[keys.command]]
+key = "prefix+g"
+command = "lazygit"
+type = "pane"
+direction = "down"
+"#,
+        )
+        .unwrap();
+
+        let keybinds = config.keybinds();
+        assert_eq!(
+            keybinds.custom_commands[0].direction,
+            CommandSplitDirection::Right
+        );
+        assert!(config
+            .collect_diagnostics()
+            .iter()
+            .any(|diag| diag.contains("split direction on non-split custom command")));
     }
 
     #[test]

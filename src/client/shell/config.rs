@@ -217,6 +217,12 @@ impl ClientShellConfig {
                             crate::protocol::ClientShellCommandAction::PluginAction => {
                                 crate::config::CommandKeybindType::PluginAction
                             }
+                            crate::protocol::ClientShellCommandAction::Tab => {
+                                crate::config::CommandKeybindType::Tab
+                            }
+                            crate::protocol::ClientShellCommandAction::Split => {
+                                crate::config::CommandKeybindType::Split
+                            }
                             crate::protocol::ClientShellCommandAction::Unknown => return None,
                         };
                         Some(crate::config::CommandKeybindConfig {
@@ -232,6 +238,7 @@ impl ClientShellConfig {
                             description: command.description.clone(),
                             width: None,
                             height: None,
+                            direction: None,
                         })
                     })
                     .collect();
@@ -259,6 +266,7 @@ impl ClientShellConfig {
                         description: command.description.clone(),
                         width: None,
                         height: None,
+                        direction: Default::default(),
                     });
             }
         }

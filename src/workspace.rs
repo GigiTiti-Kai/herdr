@@ -214,6 +214,13 @@ pub(crate) fn reserve_workspace_ids(workspaces: &[Workspace]) {
     }
 }
 
+/// What the root pane of a newly created tab runs.
+enum TabCommand<'a> {
+    DefaultShell,
+    Shell(&'a str),
+    Argv(&'a [String]),
+}
+
 /// A named workspace containing tabs.
 pub struct Workspace {
     /// Stable public workspace identity, independent of display order.
@@ -533,7 +540,7 @@ impl Workspace {
             host_terminal_theme,
             host_terminal_appearance,
             shell_config,
-            None,
+            TabCommand::DefaultShell,
             extra_env,
         )
     }
@@ -557,11 +564,38 @@ impl Workspace {
             host_terminal_theme,
             host_terminal_appearance,
             crate::pane::PaneShellConfig::new("", crate::config::ShellModeConfig::NonLogin),
-            Some(argv),
+            TabCommand::Argv(argv),
             extra_env,
         )
     }
 
+    /// Create a tab whose root pane runs `command` through the platform shell.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_tab_shell_command(
+        &mut self,
+        rows: u16,
+        cols: u16,
+        cwd: PathBuf,
+        command: &str,
+        extra_env: Vec<(String, String)>,
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+    ) -> std::io::Result<(usize, TerminalState, TerminalRuntime)> {
+        self.create_tab_with_runtime(
+            rows,
+            cols,
+            cwd,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            host_terminal_appearance,
+            crate::pane::PaneShellConfig::new("", crate::config::ShellModeConfig::NonLogin),
+            TabCommand::Shell(command),
+            extra_env,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn create_tab_with_runtime(
         &mut self,
         rows: u16,
@@ -571,7 +605,7 @@ impl Workspace {
         host_terminal_theme: crate::terminal_theme::TerminalTheme,
         host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
         shell_config: crate::pane::PaneShellConfig<'_>,
-        argv: Option<&[String]>,
+        command: TabCommand<'_>,
         extra_env: Vec<(String, String)>,
     ) -> std::io::Result<(usize, TerminalState, TerminalRuntime)> {
         let number = self.next_public_tab_number;
@@ -591,8 +625,8 @@ impl Workspace {
             .map(|tab| tab.render_dirty.clone())
             .expect("workspace must always have at least one tab");
 
-        let (tab, terminal, runtime) = if let Some(argv) = argv {
-            Tab::new_argv_command(
+        let (tab, terminal, runtime) = match command {
+            TabCommand::Argv(argv) => Tab::new_argv_command(
                 number,
                 cwd,
                 rows,
@@ -605,9 +639,22 @@ impl Workspace {
                 events,
                 render_notify,
                 render_dirty,
-            )?
-        } else {
-            Tab::new(
+            )?,
+            TabCommand::Shell(command) => Tab::new_shell_command(
+                number,
+                cwd,
+                rows,
+                cols,
+                command,
+                scrollback_limit_bytes,
+                host_terminal_theme,
+                host_terminal_appearance,
+                &launch_env,
+                events,
+                render_notify,
+                render_dirty,
+            )?,
+            TabCommand::DefaultShell => Tab::new(
                 number,
                 cwd,
                 rows,
@@ -620,7 +667,7 @@ impl Workspace {
                 events,
                 render_notify,
                 render_dirty,
-            )?
+            )?,
         };
         self.register_new_pane_with_number(tab.root_pane, pane_number);
         self.tabs.push(tab);

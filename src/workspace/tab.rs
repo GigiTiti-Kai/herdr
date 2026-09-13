@@ -114,7 +114,43 @@ impl Tab {
             events,
             render_notify,
             render_dirty,
-            Some(argv),
+            Some(SplitCommand::Argv { argv, launch_env }),
+        )
+    }
+
+    // Shell-command tab construction mirrors `split_focused_command` for tabs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_shell_command(
+        number: usize,
+        initial_cwd: PathBuf,
+        rows: u16,
+        cols: u16,
+        command: &str,
+        scrollback_limit_bytes: usize,
+        host_terminal_theme: crate::terminal_theme::TerminalTheme,
+        host_terminal_appearance: Option<crate::terminal_theme::HostAppearance>,
+        launch_env: &PaneLaunchEnv,
+        events: mpsc::Sender<AppEvent>,
+        render_notify: Arc<Notify>,
+        render_dirty: Arc<RenderSignal>,
+    ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
+        Self::new_with_runtime(
+            number,
+            initial_cwd,
+            rows,
+            cols,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            host_terminal_appearance,
+            crate::pane::PaneShellConfig::new("", crate::config::ShellModeConfig::NonLogin),
+            launch_env,
+            events,
+            render_notify,
+            render_dirty,
+            Some(SplitCommand::Shell {
+                command,
+                launch_env,
+            }),
         )
     }
 
@@ -132,11 +168,15 @@ impl Tab {
         events: mpsc::Sender<AppEvent>,
         render_notify: Arc<Notify>,
         render_dirty: Arc<RenderSignal>,
-        argv: Option<&[String]>,
+        command: Option<SplitCommand<'_>>,
     ) -> std::io::Result<(Self, TerminalState, TerminalRuntime)> {
         let (layout, root_id) = TileLayout::new();
-        let runtime = if let Some(argv) = argv {
-            TerminalRuntime::spawn_argv_command(
+        let launch_argv = match &command {
+            Some(SplitCommand::Argv { argv, .. }) => Some((*argv).to_vec()),
+            _ => None,
+        };
+        let runtime = match command {
+            Some(SplitCommand::Argv { argv, launch_env }) => TerminalRuntime::spawn_argv_command(
                 root_id,
                 rows,
                 cols,
@@ -150,9 +190,26 @@ impl Tab {
                 events.clone(),
                 render_notify.clone(),
                 render_dirty.clone(),
-            )?
-        } else {
-            TerminalRuntime::spawn(
+            )?,
+            Some(SplitCommand::Shell {
+                command,
+                launch_env,
+            }) => TerminalRuntime::spawn_shell_command(
+                root_id,
+                rows,
+                cols,
+                initial_cwd.clone(),
+                command,
+                launch_env,
+                crate::pane::AgentDetection::Enabled,
+                scrollback_limit_bytes,
+                host_terminal_theme,
+                host_terminal_appearance,
+                events.clone(),
+                render_notify.clone(),
+                render_dirty.clone(),
+            )?,
+            None => TerminalRuntime::spawn(
                 root_id,
                 rows,
                 cols,
@@ -165,13 +222,13 @@ impl Tab {
                 events.clone(),
                 render_notify.clone(),
                 render_dirty.clone(),
-            )?
+            )?,
         };
 
         let terminal_id = TerminalId::alloc();
-        let terminal = match argv {
+        let terminal = match launch_argv {
             Some(argv) => {
-                TerminalState::new(terminal_id.clone(), initial_cwd).with_launch_argv(argv.to_vec())
+                TerminalState::new(terminal_id.clone(), initial_cwd).with_launch_argv(argv)
             }
             None => TerminalState::new(terminal_id.clone(), initial_cwd),
         };

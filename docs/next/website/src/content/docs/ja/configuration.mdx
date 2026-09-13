@@ -215,6 +215,30 @@ Windows では、代わりに `command = "powershell.exe -NoLogo"` のような�
 
 `type = "pane"` は一時的なペインを開き、コマンドの終了時に閉じます。
 
+`type = "tab"` と `type = "split"` は、組み込みの新規タブ・分割アクションと同じ動作をしつつ、デフォルトシェルの代わりにコマンドを実行します。作成されるのは通常の永続的なペインで、`[terminal] new_cwd` ポリシーに従います。セッション復元ではペインの配置は保たれますが、これらのペインはデフォルトシェルで開き直されます。`type = "split"` は任意で `direction` に `"right"`（デフォルト）または `"down"` を指定できます。`default_shell` を変えずに別のシェルを開くには、Unix と macOS では `exec` でラッパーシェルを置き換えてください。Windows では代わりに `command = "pwsh.exe -NoLogo"` のようなシェルコマンドを使ってください:
+
+```toml
+[[keys.command]]
+key = "prefix+ctrl+c"
+type = "tab"
+command = "exec pwsh"
+description = "new pwsh tab"
+
+[[keys.command]]
+key = "prefix+ctrl+v"
+type = "split"
+direction = "right"
+command = "exec pwsh"
+description = "split pwsh right"
+
+[[keys.command]]
+key = "prefix+ctrl+d"
+type = "split"
+direction = "down"
+command = "exec pwsh"
+description = "split pwsh down"
+```
+
 `type = "shell"` はバックグラウンドでデタッチ実行します。
 
 `type = "plugin_action"` はインストール済みプラグインのアクション id を呼び出します。アクション id がグローバルに一意でない場合は修飾 id を使ってください:

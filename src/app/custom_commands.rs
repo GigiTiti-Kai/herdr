@@ -219,6 +219,14 @@ impl App {
             crate::config::CustomCommandAction::Pane => {
                 self.spawn_pane_command(&binding.command, Vec::new())
             }
+            crate::config::CustomCommandAction::Tab => self.spawn_tab_command(&binding.command),
+            crate::config::CustomCommandAction::Split => {
+                let direction = match binding.direction {
+                    crate::config::CommandSplitDirection::Right => Direction::Horizontal,
+                    crate::config::CommandSplitDirection::Down => Direction::Vertical,
+                };
+                self.spawn_split_command(direction, &binding.command)
+            }
             crate::config::CustomCommandAction::Popup => self.spawn_custom_popup_command(binding),
             crate::config::CustomCommandAction::PluginAction => self
                 .invoke_plugin_action_from_keybind(binding.command.clone(), selected_text)
@@ -357,6 +365,96 @@ impl App {
                 target: None,
             });
         }
+        Ok(())
+    }
+
+    /// `type = "tab"`: a persistent tab whose root pane runs `command`, with
+    /// the same cwd policy and bookkeeping as `tab.create`.
+    fn spawn_tab_command(&mut self, command: &str) -> std::io::Result<()> {
+        let Some(ws_idx) = self.state.active else {
+            return Err(std::io::Error::other("no active workspace"));
+        };
+        let cwd = self.resolve_new_terminal_cwd(self.focused_pane_cwd_in_workspace(ws_idx));
+        let (rows, cols) = self.state.estimate_pane_size();
+        let (env, _) = self.custom_command_env();
+        let scrollback_limit_bytes = self.state.pane_scrollback_limit_bytes;
+        let host_terminal_theme = self.state.host_terminal_theme;
+        let host_terminal_appearance = self.state.host_terminal_appearance;
+        let ws = self
+            .state
+            .workspaces
+            .get_mut(ws_idx)
+            .ok_or_else(|| std::io::Error::other("active workspace disappeared"))?;
+        let (tab_idx, terminal, runtime) = ws.create_tab_shell_command(
+            rows,
+            cols,
+            cwd,
+            command,
+            env,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            host_terminal_appearance,
+        )?;
+        self.terminal_runtimes.insert(terminal.id.clone(), runtime);
+        self.state.terminals.insert(terminal.id.clone(), terminal);
+        self.state.remove_alias_shadowed_by_new_pane(
+            self.state.workspaces[ws_idx].tabs[tab_idx].root_pane,
+        );
+        self.state.switch_workspace_tab(ws_idx, tab_idx);
+        self.state.mode = Mode::Terminal;
+        self.schedule_session_save();
+        self.emit_tab_created_events(ws_idx, tab_idx);
+        Ok(())
+    }
+
+    /// `type = "split"`: a persistent split of the focused pane running
+    /// `command`, with the same cwd policy and bookkeeping as `pane.split`.
+    fn spawn_split_command(&mut self, direction: Direction, command: &str) -> std::io::Result<()> {
+        let Some(ws_idx) = self.state.active else {
+            return Err(std::io::Error::other("no active workspace"));
+        };
+        let previous_focus = self.state.current_pane_focus_target();
+        let (rows, cols) = self.state.estimate_pane_size();
+        let (env, _) = self.custom_command_env();
+        let cwd = Some(self.resolve_new_terminal_cwd(self.focused_pane_cwd_in_workspace(ws_idx)));
+        let scrollback_limit_bytes = self.state.pane_scrollback_limit_bytes;
+        let host_terminal_theme = self.state.host_terminal_theme;
+        let host_terminal_appearance = self.state.host_terminal_appearance;
+        let ws = self
+            .state
+            .workspaces
+            .get_mut(ws_idx)
+            .ok_or_else(|| std::io::Error::other("active workspace disappeared"))?;
+        let tab_idx = ws.active_tab_index();
+        let new_pane = ws.split_focused_command(
+            direction,
+            rows,
+            cols,
+            cwd,
+            command,
+            env,
+            scrollback_limit_bytes,
+            host_terminal_theme,
+            host_terminal_appearance,
+        )?;
+        self.terminal_runtimes
+            .insert(new_pane.terminal.id.clone(), new_pane.runtime);
+        self.state
+            .remove_alias_shadowed_by_new_pane(new_pane.pane_id);
+        self.state
+            .terminals
+            .insert(new_pane.terminal.id.clone(), new_pane.terminal);
+        self.state
+            .record_pane_focus_change(previous_focus, ws_idx, new_pane.pane_id);
+        self.state.mode = Mode::Terminal;
+        self.schedule_session_save();
+        if let Some(pane) = self.pane_info(ws_idx, new_pane.pane_id) {
+            self.emit_event(crate::api::schema::EventEnvelope {
+                event: crate::api::schema::EventKind::PaneCreated,
+                data: crate::api::schema::EventData::PaneCreated { pane },
+            });
+        }
+        self.emit_layout_updated_event(ws_idx, tab_idx);
         Ok(())
     }
 
@@ -590,7 +688,79 @@ mod tests {
             description: Some("safe description".into()),
             width: None,
             height: None,
+            direction: Default::default(),
         }
+    }
+
+    fn test_app_with_workspace() -> crate::app::App {
+        let mut app = test_app();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("commands")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app
+    }
+
+    fn invoke_only_command(app: &mut crate::app::App) -> String {
+        let command_id = app.client_shell_command_manifest()[0].command_id.clone();
+        app.handle_command_invoke(
+            "request-1".into(),
+            crate::api::schema::CommandInvokeParams {
+                command_id,
+                workspace_id: None,
+                tab_id: None,
+                pane_id: None,
+                selection: None,
+            },
+        )
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tab_command_creates_and_focuses_a_persistent_tab() {
+        let mut app = test_app_with_workspace();
+        let mut command = binding(crate::config::CustomCommandAction::Tab);
+        command.command = crate::app::api::test_support::exiting_test_command().into();
+        install(&mut app, command);
+
+        let response = invoke_only_command(&mut app);
+
+        let success: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.result, crate::api::schema::ResponseResult::Ok {});
+        let ws = &app.state.workspaces[0];
+        assert_eq!(ws.tabs.len(), 2);
+        assert_eq!(ws.active_tab_index(), 1);
+        assert!(!ws.tabs[1].zoomed);
+        assert!(app.overlay_panes.is_empty());
+        crate::app::api::test_support::shutdown_test_runtimes(&mut app);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn split_command_splits_focused_pane_in_configured_direction() {
+        let mut app = test_app_with_workspace();
+        let mut command = binding(crate::config::CustomCommandAction::Split);
+        command.command = crate::app::api::test_support::exiting_test_command().into();
+        command.direction = crate::config::CommandSplitDirection::Down;
+        install(&mut app, command);
+
+        let response = invoke_only_command(&mut app);
+
+        let success: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.result, crate::api::schema::ResponseResult::Ok {});
+        let ws = &app.state.workspaces[0];
+        assert_eq!(ws.tabs.len(), 1);
+        assert_eq!(ws.tabs[0].panes.len(), 2);
+        assert!(!ws.tabs[0].zoomed);
+        assert!(app.overlay_panes.is_empty());
+        assert!(matches!(
+            ws.tabs[0].layout.root(),
+            crate::layout::Node::Split {
+                direction: super::Direction::Vertical,
+                ..
+            }
+        ));
+        crate::app::api::test_support::shutdown_test_runtimes(&mut app);
     }
 
     fn install(app: &mut crate::app::App, binding: crate::config::CustomCommandKeybind) {

@@ -7,7 +7,7 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo"
 
-export ZIG="${ZIG:-$HOME/.local/opt/zig-0.15.2/zig}"
+export ZIG="${ZIG:-$HOME/.local/opt/zig-0.16.0/zig}"
 export HERDR_BUILD_CHANNEL=fork
 HERDR_BUILD_ID="$(git rev-parse --short HEAD)"
 export HERDR_BUILD_ID

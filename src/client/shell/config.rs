@@ -34,6 +34,22 @@ impl ClientShellState {
         collapsed_groups.sort();
         let mut folded_workspaces = self.folded_workspaces.iter().cloned().collect::<Vec<_>>();
         folded_workspaces.sort();
+        let mut remote_collapsed_groups = self
+            .remote_collapsed_groups
+            .iter()
+            .filter_map(|(endpoint_id, groups)| {
+                let ClientEndpointId::Ssh(profile_id) = endpoint_id else {
+                    return None;
+                };
+                let mut collapsed_groups = groups.iter().cloned().collect::<Vec<_>>();
+                collapsed_groups.sort();
+                (!collapsed_groups.is_empty()).then(|| preferences::ClientRemoteCollapsedGroups {
+                    profile_id: profile_id.to_string(),
+                    collapsed_groups,
+                })
+            })
+            .collect::<Vec<_>>();
+        remote_collapsed_groups.sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
         let preferences = preferences::ClientChromePreferences {
             sidebar_width: self.sidebar_width_manual.then_some(self.sidebar_width),
             sidebar_section_split: self
@@ -47,9 +63,10 @@ impl ClientShellState {
                 .then_some(self.config.agent_panel_sort),
             collapsed_groups,
             folded_workspaces,
+            remote_collapsed_groups,
         };
         if let Err(error) = preferences::store(path, preferences) {
-            self.endpoint_error = Some(error);
+            self.set_endpoint_error(error);
             outcome.repaint = true;
         }
     }
@@ -83,7 +100,7 @@ impl ClientShellState {
                         .config
                         .apply_snapshot_keybindings(profile.as_deref(), &commands)
                     {
-                        self.endpoint_error = Some(err);
+                        self.set_endpoint_error(err);
                     }
                 }
             }
@@ -470,7 +487,10 @@ mod tests {
         );
         assert_eq!(shell.agents.row_gap, 2);
         assert_eq!(
-            shell.agents.rows[0][0].style_for_value("Local").bold,
+            shell.agents.rows[0][0]
+                .style_for_value("Local")
+                .unwrap()
+                .bold,
             Some(true)
         );
         let previous = shell.agents.clone();

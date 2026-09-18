@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Vendored upstream libghostty-vt sources: CI secret references and Zig literals, not our credentials"
+paths = ['''^vendor/libghostty-vt/''']

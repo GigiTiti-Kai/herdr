@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::{App, GIT_REMOTE_STATUS_REFRESH_INTERVAL, GIT_REPO_DISCOVERY_REFRESH_INTERVAL};
 use crate::events::AppEvent;
 use crate::workspace::{GitStatusCacheEntry, GitStatusRefreshDemand, WorkspaceGitStatus};
+
+const PANE_GIT_CONTEXT_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WorkspaceGitRefreshItem {
@@ -47,9 +49,18 @@ impl App {
         let refresh_repo_discovery = self.git_identity_refresh_requested
             || now.saturating_duration_since(self.last_git_repo_discovery_refresh)
                 >= GIT_REPO_DISCOVERY_REFRESH_INTERVAL;
-        let workspaces = self.workspace_git_refresh_items(refresh_repo_discovery);
+        let mut demand = self.git_refresh_demand();
+        if self.git_identity_refresh_requested {
+            demand.branch = true;
+        }
+        let workspaces = if demand.is_empty() {
+            Vec::new()
+        } else {
+            self.workspace_git_refresh_items(refresh_repo_discovery)
+        };
+        let pane_cwds = self.pane_foreground_cwds();
 
-        if workspaces.is_empty() {
+        if workspaces.is_empty() && pane_cwds.is_empty() {
             self.last_git_remote_status_refresh = now;
             self.git_identity_refresh_requested = false;
             return;
@@ -58,11 +69,6 @@ impl App {
         self.git_refresh_in_flight = true;
         let event_tx = self.event_tx.clone();
         let cache = self.git_status_cache.clone();
-        let agent_cwds = self.agent_foreground_cwds();
-        let mut demand = self.git_refresh_demand();
-        if self.git_identity_refresh_requested {
-            demand.branch = true;
-        }
         self.git_identity_refresh_requested = false;
         if refresh_repo_discovery {
             self.last_git_repo_discovery_refresh = now;
@@ -74,14 +80,14 @@ impl App {
                 results: output.results,
                 cache_updates: output.cache_updates,
             });
-            let contexts = agent_cwds
+            let contexts = pane_cwds
                 .into_iter()
                 .map(|cwd| {
-                    let context = crate::workspace::agent_git_context(&cwd);
+                    let context = crate::workspace::pane_git_context(&cwd);
                     (cwd, context)
                 })
                 .collect();
-            let _ = event_tx.blocking_send(AppEvent::AgentGitContextsRefreshed(contexts));
+            let _ = event_tx.blocking_send(AppEvent::PaneGitContextsRefreshed(contexts));
         });
     }
 
@@ -104,10 +110,16 @@ impl App {
     }
 
     pub(crate) fn git_refresh_deadline(&self) -> Option<Instant> {
-        (!self.git_refresh_in_flight
-            && !self.state.workspaces.is_empty()
-            && (self.git_identity_refresh_requested || !self.git_refresh_demand().is_empty()))
-        .then_some(self.last_git_remote_status_refresh + GIT_REMOTE_STATUS_REFRESH_INTERVAL)
+        let interval = if self.git_identity_refresh_requested
+            || !self.git_refresh_demand().is_empty()
+            || self.pane_git_contexts.is_empty()
+        {
+            GIT_REMOTE_STATUS_REFRESH_INTERVAL
+        } else {
+            PANE_GIT_CONTEXT_REFRESH_INTERVAL
+        };
+        (!self.git_refresh_in_flight && !self.state.workspaces.is_empty())
+            .then_some(self.last_git_remote_status_refresh + interval)
     }
 
     fn git_refresh_demand(&self) -> GitStatusRefreshDemand {
@@ -123,14 +135,22 @@ impl App {
         demand
     }
 
-    /// Distinct foreground cwds of every pane hosting an agent.
-    fn agent_foreground_cwds(&self) -> Vec<PathBuf> {
-        let mut cwds = self
-            .collect_agent_infos()
-            .into_iter()
-            .filter_map(|agent| agent.foreground_cwd)
-            .map(PathBuf::from)
-            .collect::<Vec<_>>();
+    /// Distinct foreground cwds of all panes, collected outside the render path.
+    fn pane_foreground_cwds(&self) -> Vec<PathBuf> {
+        let mut cwds = Vec::new();
+        for workspace in &self.state.workspaces {
+            for tab in &workspace.tabs {
+                for pane_id in tab.layout.pane_ids() {
+                    if let Some(cwd) = tab.follow_cwd_for_pane(
+                        pane_id,
+                        &self.state.terminals,
+                        &self.terminal_runtimes,
+                    ) {
+                        cwds.push(cwd);
+                    }
+                }
+            }
+        }
         cwds.sort();
         cwds.dedup();
         cwds
@@ -238,6 +258,32 @@ fn refresh_workspace_git_statuses_with_cache_and_demand(
 mod tests {
     use super::*;
     use crate::workspace::Workspace;
+
+    #[test]
+    fn git_refresh_includes_cwds_from_all_split_panes() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let mut workspace = Workspace::test_new("repo");
+        let first = workspace.tabs[0].root_pane;
+        let second = workspace.test_split(ratatui::layout::Direction::Horizontal);
+        let first_terminal = workspace.tabs[0].terminal_id(first).unwrap().clone();
+        let second_terminal = workspace.tabs[0].terminal_id(second).unwrap().clone();
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.terminals.get_mut(&first_terminal).unwrap().cwd = "/repo/one".into();
+        app.state.terminals.get_mut(&second_terminal).unwrap().cwd = "/repo/two".into();
+
+        assert_eq!(
+            app.pane_foreground_cwds(),
+            vec![PathBuf::from("/repo/one"), PathBuf::from("/repo/two")]
+        );
+    }
 
     #[test]
     fn git_refresh_deduplicates_workspaces_with_same_cache_key() {
@@ -415,18 +461,28 @@ mod tests {
     }
 
     #[test]
-    fn due_git_refresh_does_not_start_without_sidebar_consumer() {
+    fn pane_git_contexts_refresh_without_server_sidebar_git_tokens() {
         let mut config = crate::config::Config::default();
         config.ui.sidebar.spaces.rows = vec![vec![crate::config::SpaceSidebarToken::Workspace]];
         let mut app = test_app(&config);
         app.state.workspaces.push(Workspace::test_new("test"));
+        app.state.ensure_test_terminals();
         let now = Instant::now();
         app.last_git_remote_status_refresh = now - GIT_REMOTE_STATUS_REFRESH_INTERVAL;
 
         app.start_git_status_refresh_if_due(now);
 
-        assert!(!app.git_refresh_in_flight);
-        assert!(app.event_rx.try_recv().is_err());
+        assert!(app.git_refresh_in_flight);
+        app.git_refresh_in_flight = false;
+        app.pane_git_contexts.insert(
+            PathBuf::from("/repo"),
+            crate::workspace::PaneGitContext::default(),
+        );
+        app.last_git_remote_status_refresh = now;
+        assert_eq!(
+            app.git_refresh_deadline(),
+            Some(now + PANE_GIT_CONTEXT_REFRESH_INTERVAL)
+        );
     }
 
     #[test]
@@ -459,11 +515,6 @@ mod tests {
             app.state.workspaces.push(Workspace::test_new("test"));
 
             assert_eq!(app.git_refresh_demand(), expected, "token: {token:?}");
-            assert_eq!(
-                app.git_refresh_deadline().is_some(),
-                !expected.is_empty(),
-                "token: {token:?}"
-            );
         }
     }
 
@@ -483,7 +534,8 @@ mod tests {
         });
         app.state.workspaces.push(child);
 
-        assert_eq!(app.git_refresh_deadline(), None);
+        assert!(app.git_refresh_demand().is_empty());
+        assert!(app.git_refresh_deadline().is_some());
     }
 
     #[test]
@@ -501,7 +553,8 @@ mod tests {
         });
         app.state.workspaces.push(child);
 
-        assert_eq!(app.git_refresh_deadline(), None);
+        assert!(app.git_refresh_demand().is_empty());
+        assert!(app.git_refresh_deadline().is_some());
     }
 
     #[test]

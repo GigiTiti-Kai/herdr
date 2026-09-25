@@ -114,6 +114,20 @@ pub(super) fn snapshot(
                         .pane_state(pane_id)
                 })
                 .is_some_and(|pane| pane.right_click_passthrough);
+            let git_context =
+                pane.foreground_cwd
+                    .as_deref()
+                    .or(pane.cwd.as_deref())
+                    .and_then(|cwd| app.pane_git_contexts.get(std::path::Path::new(cwd)))
+                    .and_then(|context| {
+                        context.repo.as_ref().zip(context.repo_key.as_ref()).map(
+                            |(repo, repo_key)| protocol::ClientShellPaneGitContext {
+                                repo_key: repo_key.clone(),
+                                repo: repo.clone(),
+                                worktree: context.worktree.clone(),
+                            },
+                        )
+                    });
             protocol::ClientShellPane {
                 pane_id,
                 workspace_id: pane.workspace_id,
@@ -121,6 +135,7 @@ pub(super) fn snapshot(
                 label: pane.label,
                 cwd: pane.cwd,
                 foreground_cwd: pane.foreground_cwd,
+                git_context,
                 focused,
                 right_click_passthrough,
             }
@@ -148,7 +163,7 @@ pub(super) fn snapshot(
                 let context = agent
                     .foreground_cwd
                     .as_deref()
-                    .and_then(|cwd| app.agent_git_contexts.get(std::path::Path::new(cwd)));
+                    .and_then(|cwd| app.pane_git_contexts.get(std::path::Path::new(cwd)));
                 inject_agent_git_tokens(&mut tokens, context, label, worktree.as_deref());
             }
             let mut tokens = tokens.into_iter().collect::<Vec<_>>();
@@ -561,7 +576,7 @@ fn split_hit_rect(
 /// its workspace's own checkout. Values reported by the pane itself win.
 pub(super) fn inject_agent_git_tokens(
     tokens: &mut std::collections::HashMap<String, String>,
-    context: Option<&crate::workspace::AgentGitContext>,
+    context: Option<&crate::workspace::PaneGitContext>,
     workspace_label: &str,
     workspace_worktree: Option<&str>,
 ) {
@@ -591,11 +606,49 @@ pub(super) fn inject_agent_git_tokens(
 #[cfg(test)]
 mod tests {
     #[test]
+    fn snapshot_projects_cached_git_context_for_a_pane() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = crate::app::App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("repo")];
+        app.state.ensure_test_terminals();
+        let initial = super::snapshot(&app, "boot", 1, None, None);
+        let cwd = initial.panes[0]
+            .foreground_cwd
+            .as_deref()
+            .or(initial.panes[0].cwd.as_deref())
+            .expect("pane cwd");
+        app.pane_git_contexts.insert(
+            std::path::PathBuf::from(cwd),
+            crate::workspace::PaneGitContext {
+                repo: Some("other-repo".into()),
+                repo_key: Some("/other-repo/.git".into()),
+                worktree: Some("checkout".into()),
+            },
+        );
+        let projected = super::snapshot(&app, "boot", 2, None, None);
+        assert_eq!(
+            projected.panes[0].git_context,
+            Some(crate::protocol::ClientShellPaneGitContext {
+                repo_key: "/other-repo/.git".into(),
+                repo: "other-repo".into(),
+                worktree: Some("checkout".into()),
+            })
+        );
+    }
+
+    #[test]
     fn agent_git_tokens_only_mark_panes_outside_their_workspace_checkout() {
         use super::inject_agent_git_tokens;
-        use crate::workspace::AgentGitContext;
-        let context = AgentGitContext {
+        use crate::workspace::PaneGitContext;
+        let context = PaneGitContext {
             repo: Some("herdr".into()),
+            repo_key: Some("/herdr/.git".into()),
             worktree: Some("typed-splashing-dusk".into()),
         };
 

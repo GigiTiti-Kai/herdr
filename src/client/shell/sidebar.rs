@@ -231,6 +231,7 @@ pub(crate) fn render_sidebar(
                 .map(|workspace| {
                     let rows = workspace_rows(
                         workspace,
+                        &snapshot.panes,
                         displayed_workspace_status(snapshot, workspace, state.collapsed_groups),
                         entry.indented,
                         &config.spaces,
@@ -292,7 +293,13 @@ pub(crate) fn render_sidebar(
             continue;
         };
         let status = displayed_workspace_status(snapshot, workspace, state.collapsed_groups);
-        let full_rows = workspace_rows(workspace, status, entry.indented, &config.spaces);
+        let full_rows = workspace_rows(
+            workspace,
+            &snapshot.panes,
+            status,
+            entry.indented,
+            &config.spaces,
+        );
         let foldable = full_rows.len() > 1;
         let folded = foldable && state.folded_workspaces.contains(&workspace.workspace_id);
         let rows = visible_workspace_rows(full_rows, folded);
@@ -648,6 +655,7 @@ fn visible_workspace_rows(
 
 pub(in crate::client::shell) fn workspace_rows(
     workspace: &ClientShellWorkspace,
+    panes: &[crate::protocol::ClientShellPane],
     status: crate::api::schema::AgentStatus,
     indented: bool,
     config: &SpacesSidebarConfig,
@@ -661,31 +669,123 @@ pub(in crate::client::shell) fn workspace_rows(
     } else {
         &workspace.label
     };
+    let worktree_token = config
+        .rows
+        .iter()
+        .flatten()
+        .find(|token| matches!(token.parts().0, crate::config::SpaceSidebarToken::Worktree));
+    let mut checkouts = Vec::new();
+    if !indented && worktree_token.is_some() {
+        for pane in panes
+            .iter()
+            .filter(|pane| pane.tab_id == workspace.active_tab_id)
+        {
+            if let Some(context) = pane.git_context.as_ref() {
+                let checkout = (
+                    context.repo_key.as_str(),
+                    context.repo.as_str(),
+                    context.worktree.as_deref(),
+                );
+                if !checkouts
+                    .iter()
+                    .any(|(key, _, worktree)| *key == checkout.0 && *worktree == checkout.2)
+                {
+                    checkouts.push(checkout);
+                }
+            }
+        }
+    }
+    let mut repos = Vec::new();
+    for (key, repo, _) in &checkouts {
+        if !repos.iter().any(|(known_key, _)| known_key == key) {
+            repos.push((*key, *repo));
+        }
+    }
+    let mixed = repos.len() > 1;
+    let mixed_label =
+        (mixed && !workspace.custom_label).then(|| format!("{} projects", repos.len()));
     let token_values = workspace.tokens.iter().cloned().collect::<HashMap<_, _>>();
-    crate::ui::sidebar_space_rows(
+    let mut rows = crate::ui::sidebar_space_rows(
         config,
         crate::ui::SpaceTokenContext {
-            workspace: label,
+            workspace: mixed_label.as_deref().unwrap_or(label),
             // A lone linked-worktree space already uses the checkout name as its
             // label; do not print the same name twice.
             worktree: workspace
                 .worktree_name
                 .as_deref()
-                .filter(|name| *name != label),
+                .filter(|name| !mixed && *name != label),
             // `claude -w` names its branch `worktree-<checkout>`, which repeats
             // the worktree row verbatim; hide that branch, keep any other.
             branch: workspace.branch.as_deref().filter(|branch| {
-                workspace
-                    .worktree_name
-                    .as_deref()
-                    .is_none_or(|checkout| *branch != format!("worktree-{checkout}"))
+                !mixed && {
+                    workspace
+                        .worktree_name
+                        .as_deref()
+                        .is_none_or(|checkout| *branch != format!("worktree-{checkout}"))
+                }
             }),
             state_text: status_text(status),
-            ahead_behind: workspace.git_ahead_behind,
+            ahead_behind: (!mixed).then_some(workspace.git_ahead_behind).flatten(),
             tokens: &token_values,
             suppress_git_details: indented,
         },
-    )
+    );
+    let worktree_row = |name: &str, nested: bool| {
+        let value = format!("wt:{name}");
+        worktree_token
+            .and_then(|token| token.style_for_value(&value))
+            .map(|style| {
+                vec![crate::ui::ResolvedToken {
+                    kind: crate::ui::ResolvedTokenKind::Worktree(format!(
+                        "{}{}",
+                        if nested { "  " } else { "" },
+                        value
+                    )),
+                    style,
+                }]
+            })
+    };
+    if mixed {
+        let mut details = Vec::new();
+        for (index, (repo_key, repo)) in repos.iter().enumerate() {
+            let label = if repos.iter().filter(|(_, name)| name == repo).count() > 1 {
+                format!(
+                    "{repo} ({})",
+                    repos[..=index]
+                        .iter()
+                        .filter(|(_, name)| name == repo)
+                        .count()
+                )
+            } else {
+                repo.to_string()
+            };
+            details.push(vec![crate::ui::ResolvedToken {
+                kind: crate::ui::ResolvedTokenKind::Workspace(label),
+                style: Default::default(),
+            }]);
+            for (_, _, worktree) in checkouts.iter().filter(|(key, _, _)| key == repo_key) {
+                if let Some(worktree) = worktree {
+                    if let Some(row) = worktree_row(worktree, true) {
+                        details.push(row);
+                    }
+                }
+            }
+        }
+        let insert_at = 1.min(rows.len());
+        rows.splice(insert_at..insert_at, details);
+    } else {
+        for (_, _, worktree) in checkouts {
+            if let Some(worktree) =
+                worktree.filter(|name| Some(*name) != workspace.worktree_name.as_deref())
+            {
+                if let Some(row) = worktree_row(worktree, false) {
+                    rows.push(row);
+                }
+            }
+        }
+    }
+    rows
 }
 
 pub(in crate::client::shell) fn render_workspace_rows(

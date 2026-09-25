@@ -59,6 +59,7 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
             label: None,
             cwd: Some("/repo".into()),
             foreground_cwd: Some("/repo".into()),
+            git_context: None,
             focused: true,
             right_click_passthrough: false,
         }],

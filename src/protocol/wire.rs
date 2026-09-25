@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Current protocol version. Bumped when wire format changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 23;
+pub const PROTOCOL_VERSION: u32 = 24;
 
 /// Maximum allowed frame payload size (2 MB). Frames larger than this are
 /// rejected to prevent denial-of-service via oversized length prefixes.
@@ -1080,8 +1080,17 @@ pub struct ClientShellPane {
     pub label: Option<String>,
     pub cwd: Option<String>,
     pub foreground_cwd: Option<String>,
+    #[serde(default)]
+    pub git_context: Option<ClientShellPaneGitContext>,
     pub focused: bool,
     pub right_click_passthrough: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientShellPaneGitContext {
+    pub repo_key: String,
+    pub repo: String,
+    pub worktree: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2749,6 +2758,7 @@ mod tests {
                 label: None,
                 cwd: Some("/repo".into()),
                 foreground_cwd: Some("/repo".into()),
+                git_context: None,
                 focused: true,
                 right_click_passthrough: false,
             }],

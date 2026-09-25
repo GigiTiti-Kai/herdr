@@ -1517,7 +1517,7 @@ fn clicking_detail_rows_folds_workspace_and_space_key_unfolds() {
     assert!(!state.folded_workspaces.contains("ws_1"));
 
     state.mode = ClientShellMode::Navigate;
-    state.navigate_workspace_id = Some("ws_1".into());
+    state.navigate_workspace_id = state.navigation_target(&ClientEndpointId::Local, "ws_1");
     state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
         KeyCode::Char(' '),
         KeyModifiers::empty(),
@@ -1567,6 +1567,146 @@ fn auto_named_worktree_branch_is_hidden_but_custom_branch_shows() {
     let text = frame_text(&frame);
     assert!(text.contains("feat/real-work"));
     assert_eq!(state.hits.workspaces[0].rect.height, 3);
+}
+
+#[test]
+fn space_lists_each_worktree_in_the_active_split_tab_once() {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.spaces.rows = vec![
+        vec![crate::config::SpaceSidebarToken::Workspace],
+        vec![crate::config::SpaceSidebarToken::Worktree],
+        vec![crate::config::SpaceSidebarToken::Branch],
+    ];
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    snapshot.workspaces[0].label = "auto-teikeikun".into();
+    snapshot.workspaces[0].worktree_name = Some("first-checkout".into());
+    snapshot.workspaces[0].branch = Some("claude/p1-7-remove-basic-auth".into());
+    snapshot.panes[0].git_context = Some(crate::protocol::ClientShellPaneGitContext {
+        repo_key: "/auto-teikeikun/.git".into(),
+        repo: "auto-teikeikun".into(),
+        worktree: Some("first-checkout".into()),
+    });
+    let mut second = snapshot.panes[0].clone();
+    second.pane_id = "pane_2".into();
+    second.git_context.as_mut().unwrap().worktree = Some("second-checkout".into());
+    snapshot.panes.push(second.clone());
+    second.pane_id = "pane_3".into();
+    snapshot.panes.push(second);
+    let mut other_tab = snapshot.panes[0].clone();
+    other_tab.pane_id = "pane_4".into();
+    other_tab.tab_id = "other_tab".into();
+    other_tab.git_context.as_mut().unwrap().worktree = Some("not-active".into());
+    snapshot.panes.push(other_tab);
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 20).expect("composed frame");
+    let text = frame_text(&frame);
+    assert!(text.contains("wt:first-checkout"));
+    assert_eq!(text.matches("wt:second-checkout").count(), 1);
+    assert!(!text.contains("not-active"));
+    assert!(text.find("wt:first-checkout").unwrap() < text.find("claude/p1-7").unwrap());
+    assert!(text.find("claude/p1-7").unwrap() < text.find("wt:second-checkout").unwrap());
+    assert_eq!(state.hits.workspaces[0].rect.height, 4);
+}
+
+#[test]
+fn space_shows_a_secondary_worktree_when_the_root_pane_is_on_main() {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.spaces.rows = vec![
+        vec![crate::config::SpaceSidebarToken::Workspace],
+        vec![crate::config::SpaceSidebarToken::Worktree],
+    ];
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    snapshot.panes[0].git_context = Some(crate::protocol::ClientShellPaneGitContext {
+        repo_key: "/client-shell/.git".into(),
+        repo: "client-shell".into(),
+        worktree: None,
+    });
+    let mut second = snapshot.panes[0].clone();
+    second.pane_id = "pane_2".into();
+    second.git_context.as_mut().unwrap().worktree = Some("linked-checkout".into());
+    snapshot.panes.push(second);
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 20).expect("composed frame");
+    assert!(frame_text(&frame).contains("wt:linked-checkout"));
+    assert_eq!(state.hits.workspaces[0].rect.height, 2);
+}
+
+#[test]
+fn mixed_project_split_space_groups_worktrees_under_each_project() {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.spaces.rows = vec![
+        vec![crate::config::SpaceSidebarToken::Workspace],
+        vec![crate::config::SpaceSidebarToken::Worktree],
+        vec![crate::config::SpaceSidebarToken::Branch],
+    ];
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    snapshot.workspaces[0].label = "prompts-box".into();
+    snapshot.workspaces[0].worktree_name = Some("splendid".into());
+    snapshot.panes[0].git_context = Some(crate::protocol::ClientShellPaneGitContext {
+        repo_key: "/prompts-box/.git".into(),
+        repo: "prompts-box".into(),
+        worktree: Some("splendid".into()),
+    });
+    let mut second = snapshot.panes[0].clone();
+    second.pane_id = "pane_2".into();
+    second.git_context = Some(crate::protocol::ClientShellPaneGitContext {
+        repo_key: "/character-message-scheduler/.git".into(),
+        repo: "character-message-scheduler".into(),
+        worktree: Some("replicated".into()),
+    });
+    snapshot.panes.push(second);
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 20).expect("composed frame");
+    let text = frame_text(&frame);
+    assert!(text.contains("2 projects"));
+    assert!(text.contains("prompts-box"));
+    assert!(text.contains("wt:splendid"));
+    assert!(text.contains("character-message"));
+    assert!(text.contains("wt:replicated"));
+    assert!(text.find("prompts-box").unwrap() < text.find("wt:splendid").unwrap());
+    assert!(text.find("wt:splendid").unwrap() < text.find("character-message").unwrap());
+    assert!(text.find("character-message").unwrap() < text.find("wt:replicated").unwrap());
+    assert_eq!(state.hits.workspaces[0].rect.height, 5);
+}
+
+#[test]
+fn spaces_keep_same_named_repositories_separate() {
+    let mut config = ClientShellConfig::from_config(&Config::default());
+    config.spaces.rows = vec![
+        vec![crate::config::SpaceSidebarToken::Workspace],
+        vec![crate::config::SpaceSidebarToken::Worktree],
+    ];
+    let mut state = ClientShellState::new(config);
+    let mut snapshot = snapshot();
+    snapshot.workspaces[0].label = "api".into();
+    snapshot.workspaces[0].worktree_name = Some("feature".into());
+    snapshot.panes[0].git_context = Some(crate::protocol::ClientShellPaneGitContext {
+        repo_key: "/a/api/.git".into(),
+        repo: "api".into(),
+        worktree: Some("feature".into()),
+    });
+    let mut second = snapshot.panes[0].clone();
+    second.pane_id = "pane_2".into();
+    second.git_context.as_mut().unwrap().repo_key = "/b/api/.git".into();
+    snapshot.panes.push(second);
+    state.set_snapshot(Box::new(snapshot));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 20).expect("composed frame");
+    let text = frame_text(&frame);
+    assert!(text.contains("2 projects"));
+    assert!(text.contains("api (1)"));
+    assert!(text.contains("api (2)"));
+    assert_eq!(text.matches("wt:feature").count(), 2);
 }
 
 fn frame_text(frame: &crate::protocol::FrameData) -> String {

@@ -35,8 +35,8 @@ impl App {
                 results,
                 cache_updates,
             } => self.handle_git_status_refreshed(results, cache_updates),
-            AppEvent::AgentGitContextsRefreshed(contexts) => {
-                self.handle_agent_git_contexts_refreshed(contexts)
+            AppEvent::PaneGitContextsRefreshed(contexts) => {
+                self.handle_pane_git_contexts_refreshed(contexts)
             }
             AppEvent::TabBarCommandFinished {
                 generation,
@@ -79,15 +79,15 @@ impl App {
         changed
     }
 
-    fn handle_agent_git_contexts_refreshed(
+    fn handle_pane_git_contexts_refreshed(
         &mut self,
-        contexts: Vec<(std::path::PathBuf, crate::workspace::AgentGitContext)>,
+        contexts: Vec<(std::path::PathBuf, crate::workspace::PaneGitContext)>,
     ) -> bool {
         let next = contexts.into_iter().collect::<HashMap<_, _>>();
-        if next == self.agent_git_contexts {
+        if next == self.pane_git_contexts {
             return false;
         }
-        self.agent_git_contexts = next;
+        self.pane_git_contexts = next;
         self.render_dirty.request_generic();
         self.render_notify.notify_one();
         true
@@ -133,8 +133,8 @@ impl App {
             self.handle_git_status_refreshed(results, cache_updates);
             return Vec::new();
         }
-        if let AppEvent::AgentGitContextsRefreshed(contexts) = ev {
-            let _ = self.handle_agent_git_contexts_refreshed(contexts);
+        if let AppEvent::PaneGitContextsRefreshed(contexts) = ev {
+            let _ = self.handle_pane_git_contexts_refreshed(contexts);
             return Vec::new();
         }
 

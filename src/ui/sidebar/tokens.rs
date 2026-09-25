@@ -391,6 +391,7 @@ rows = [[{ token = "$load", rules = [{ lt = 50, hide = true }] }], ["workspace"]
                 &config.spaces,
                 SpaceTokenContext {
                     workspace: "repo",
+                    worktree: None,
                     branch: None,
                     state_text: "working",
                     ahead_behind: None,

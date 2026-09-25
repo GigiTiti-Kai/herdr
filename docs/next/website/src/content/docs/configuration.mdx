@@ -423,6 +423,8 @@ Space rows accept these built-in tokens:
 - `git_status` — Git ahead and behind counts when nonzero.
 - `$name` — custom workspace metadata named `name`.
 
+With one repository, the `worktree` token adds distinct linked checkouts from the active tab's other panes below the configured rows; the root pane's branch row stays in place. If the active tab spans repositories, the Space groups worktrees under project names and shows a project count in place of an automatic Space name. Custom Space names remain unchanged.
+
 Left-click any row below the first one to fold a Space entry down to its first row; a `…` marker appears at the right edge and clicking it unfolds the entry. In navigate mode, Space toggles the fold of the selected Space. Fold state persists per client alongside collapsed worktree groups.
 
 Tokens render in their configured order. Herdr normally separates adjacent values with ` · ` and uses a single space after `state_icon`. Missing values and their separators disappear; a row disappears when none of its tokens have a value. Existing custom rows remain unchanged, so add `machine` explicitly if you want machine identity in a custom multi-machine layout. Each layout may contain at most 16 rows, with at most 16 tokens in each row.

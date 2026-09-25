@@ -312,6 +312,29 @@ fn print_token_rule_profiles() {
     }
 }
 
+fn print_split_worktree_profiles() {
+    let mut config = Config::default();
+    config.ui.sidebar.spaces.rows = vec![
+        vec![crate::config::SpaceSidebarToken::Workspace],
+        vec![crate::config::SpaceSidebarToken::Worktree],
+    ];
+    let rows = [1, 15].map(|count| {
+        let mut pipeline = RenderPipeline::with_config(active_panes(count), &config);
+        let mut snapshot =
+            super::client_shell::snapshot(&pipeline.app, "bench-boot", 1, None, None);
+        for (index, pane) in snapshot.panes.iter_mut().enumerate() {
+            pane.git_context = Some(crate::protocol::ClientShellPaneGitContext {
+                repo: "bench".into(),
+                worktree: Some(format!("checkout-{index}")),
+            });
+        }
+        pipeline.client.set_snapshot(Box::new(snapshot));
+        (count, profile_pipeline(pipeline))
+    });
+    println!("active panes with distinct worktrees");
+    print_stage("client shell composition", &rows, |stats| stats.client);
+}
+
 #[derive(Clone, Copy)]
 enum SurfaceDamagePattern {
     Dense,
@@ -559,6 +582,7 @@ async fn render_scale_profile() {
     print_profiles("active panes (one workspace)", active_panes);
     print_snapshot_encoding_profiles("active panes", active_panes);
     print_token_rule_profiles();
+    print_split_worktree_profiles();
     print_surface_reuse_profiles();
     print_surface_damage_profiles();
 }

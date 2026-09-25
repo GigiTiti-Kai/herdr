@@ -387,6 +387,8 @@ Space 行支持以下内置 token：
 - `git_status` — 非零时显示 Git ahead 和 behind 数量。
 - `$name` — 名为 `name` 的自定义工作区元数据。
 
+同一仓库的其他 linked worktree 若出现在活动标签页的窗格中，`worktree` token 会在已配置的行之后追加不重复的 checkout；根窗格的分支行保持原位。若活动标签页包含不同仓库，Space 会按项目名称分组显示 worktree，并用项目数量替代自动生成的 Space 名称。手动设置的 Space 名称不变。
+
 左键点击第一行以下的任意一行，可将 Space 条目折叠为仅显示第一行；折叠后右端会出现 `…` 标记，点击它即可展开。在 navigate 模式下，按 Space 键可切换所选 Space 的折叠状态。折叠状态与 collapsed worktree group 一样按客户端保存。
 
 token 会按配置顺序渲染。Herdr 通常使用 ` · ` 分隔相邻值，并在 `state_icon` 后使用一个空格。缺失值及其分隔符会消失；当一行中的所有 token 都没有值时，该行会消失。已有的自定义行不会改变；如果希望在自定义的多机器布局中显示机器标识，请显式添加 `machine`。每个布局最多可包含 16 行，每行最多可包含 16 个 token。

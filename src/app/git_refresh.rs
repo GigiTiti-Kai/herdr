@@ -58,7 +58,7 @@ impl App {
         self.git_refresh_in_flight = true;
         let event_tx = self.event_tx.clone();
         let cache = self.git_status_cache.clone();
-        let agent_cwds = self.agent_foreground_cwds();
+        let pane_cwds = self.pane_foreground_cwds();
         let mut demand = self.git_refresh_demand();
         if self.git_identity_refresh_requested {
             demand.branch = true;
@@ -74,14 +74,14 @@ impl App {
                 results: output.results,
                 cache_updates: output.cache_updates,
             });
-            let contexts = agent_cwds
+            let contexts = pane_cwds
                 .into_iter()
                 .map(|cwd| {
                     let context = crate::workspace::agent_git_context(&cwd);
                     (cwd, context)
                 })
                 .collect();
-            let _ = event_tx.blocking_send(AppEvent::AgentGitContextsRefreshed(contexts));
+            let _ = event_tx.blocking_send(AppEvent::PaneGitContextsRefreshed(contexts));
         });
     }
 
@@ -123,14 +123,22 @@ impl App {
         demand
     }
 
-    /// Distinct foreground cwds of every pane hosting an agent.
-    fn agent_foreground_cwds(&self) -> Vec<PathBuf> {
-        let mut cwds = self
-            .collect_agent_infos()
-            .into_iter()
-            .filter_map(|agent| agent.foreground_cwd)
-            .map(PathBuf::from)
-            .collect::<Vec<_>>();
+    /// Distinct foreground cwds of all panes, collected outside the render path.
+    fn pane_foreground_cwds(&self) -> Vec<PathBuf> {
+        let mut cwds = Vec::new();
+        for workspace in &self.state.workspaces {
+            for tab in &workspace.tabs {
+                for pane_id in tab.layout.pane_ids() {
+                    if let Some(cwd) = tab.follow_cwd_for_pane(
+                        pane_id,
+                        &self.state.terminals,
+                        &self.terminal_runtimes,
+                    ) {
+                        cwds.push(cwd);
+                    }
+                }
+            }
+        }
         cwds.sort();
         cwds.dedup();
         cwds
@@ -238,6 +246,32 @@ fn refresh_workspace_git_statuses_with_cache_and_demand(
 mod tests {
     use super::*;
     use crate::workspace::Workspace;
+
+    #[test]
+    fn git_refresh_includes_cwds_from_all_split_panes() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let mut workspace = Workspace::test_new("repo");
+        let first = workspace.tabs[0].root_pane;
+        let second = workspace.test_split(ratatui::layout::Direction::Horizontal);
+        let first_terminal = workspace.tabs[0].terminal_id(first).unwrap().clone();
+        let second_terminal = workspace.tabs[0].terminal_id(second).unwrap().clone();
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.terminals.get_mut(&first_terminal).unwrap().cwd = "/repo/one".into();
+        app.state.terminals.get_mut(&second_terminal).unwrap().cwd = "/repo/two".into();
+
+        assert_eq!(
+            app.pane_foreground_cwds(),
+            vec![PathBuf::from("/repo/one"), PathBuf::from("/repo/two")]
+        );
+    }
 
     #[test]
     fn git_refresh_deduplicates_workspaces_with_same_cache_key() {

@@ -1213,6 +1213,7 @@ fn copy_mode_survives_mouse_motion_and_parks_across_focus_changes() {
         label: None,
         cwd: Some("/repo".into()),
         foreground_cwd: Some("/repo".into()),
+        git_context: None,
         focused: true,
         right_click_passthrough: false,
     });

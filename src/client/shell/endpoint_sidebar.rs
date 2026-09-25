@@ -299,6 +299,7 @@ pub(super) fn render_expanded(
                         Some(
                             super::sidebar::workspace_rows(
                                 workspace,
+                                &snapshot.panes,
                                 super::sidebar::displayed_workspace_status(
                                     snapshot,
                                     workspace,
@@ -429,6 +430,7 @@ pub(super) fn render_expanded(
                 );
                 let tokens = super::sidebar::workspace_rows(
                     workspace,
+                    &snapshot.panes,
                     status,
                     entry.indented,
                     &config.spaces,

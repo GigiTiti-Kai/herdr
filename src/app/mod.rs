@@ -124,7 +124,7 @@ pub struct App {
     pub(crate) git_identity_refresh_requested: bool,
     pub(crate) git_status_cache: HashMap<std::path::PathBuf, crate::workspace::GitStatusCacheEntry>,
     /// Git context per pane foreground cwd, refreshed with git status.
-    pub(crate) pane_git_contexts: HashMap<std::path::PathBuf, crate::workspace::AgentGitContext>,
+    pub(crate) pane_git_contexts: HashMap<std::path::PathBuf, crate::workspace::PaneGitContext>,
     pub(crate) pending_api_worktree_creates: HashMap<std::path::PathBuf, u64>,
     pub(crate) pending_api_worktree_removes: HashMap<String, u64>,
     pub(crate) pending_api_worktree_remove_paths: HashMap<std::path::PathBuf, u64>,

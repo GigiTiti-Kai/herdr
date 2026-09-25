@@ -681,17 +681,24 @@ pub(in crate::client::shell) fn workspace_rows(
             .filter(|pane| pane.tab_id == workspace.active_tab_id)
         {
             if let Some(context) = pane.git_context.as_ref() {
-                let checkout = (context.repo.as_str(), context.worktree.as_deref());
-                if !checkouts.contains(&checkout) {
+                let checkout = (
+                    context.repo_key.as_str(),
+                    context.repo.as_str(),
+                    context.worktree.as_deref(),
+                );
+                if !checkouts
+                    .iter()
+                    .any(|(key, _, worktree)| *key == checkout.0 && *worktree == checkout.2)
+                {
                     checkouts.push(checkout);
                 }
             }
         }
     }
     let mut repos = Vec::new();
-    for (repo, _) in &checkouts {
-        if !repos.contains(repo) {
-            repos.push(*repo);
+    for (key, repo, _) in &checkouts {
+        if !repos.iter().any(|(known_key, _)| known_key == key) {
+            repos.push((*key, *repo));
         }
     }
     let mixed = repos.len() > 1;
@@ -741,12 +748,23 @@ pub(in crate::client::shell) fn workspace_rows(
     };
     if mixed {
         let mut details = Vec::new();
-        for repo in repos {
+        for (index, (repo_key, repo)) in repos.iter().enumerate() {
+            let label = if repos.iter().filter(|(_, name)| name == repo).count() > 1 {
+                format!(
+                    "{repo} ({})",
+                    repos[..=index]
+                        .iter()
+                        .filter(|(_, name)| name == repo)
+                        .count()
+                )
+            } else {
+                repo.to_string()
+            };
             details.push(vec![crate::ui::ResolvedToken {
-                kind: crate::ui::ResolvedTokenKind::Workspace(repo.to_string()),
+                kind: crate::ui::ResolvedTokenKind::Workspace(label),
                 style: Default::default(),
             }]);
-            for (_, worktree) in checkouts.iter().filter(|(name, _)| *name == repo) {
+            for (_, _, worktree) in checkouts.iter().filter(|(key, _, _)| key == repo_key) {
                 if let Some(worktree) = worktree {
                     if let Some(row) = worktree_row(worktree, true) {
                         details.push(row);
@@ -757,7 +775,7 @@ pub(in crate::client::shell) fn workspace_rows(
         let insert_at = 1.min(rows.len());
         rows.splice(insert_at..insert_at, details);
     } else {
-        for (_, worktree) in checkouts {
+        for (_, _, worktree) in checkouts {
             if let Some(worktree) =
                 worktree.filter(|name| Some(*name) != workspace.worktree_name.as_deref())
             {

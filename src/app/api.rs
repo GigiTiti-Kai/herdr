@@ -81,7 +81,7 @@ impl App {
 
     fn handle_pane_git_contexts_refreshed(
         &mut self,
-        contexts: Vec<(std::path::PathBuf, crate::workspace::AgentGitContext)>,
+        contexts: Vec<(std::path::PathBuf, crate::workspace::PaneGitContext)>,
     ) -> bool {
         let next = contexts.into_iter().collect::<HashMap<_, _>>();
         if next == self.pane_git_contexts {

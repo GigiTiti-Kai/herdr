@@ -114,20 +114,20 @@ pub(super) fn snapshot(
                         .pane_state(pane_id)
                 })
                 .is_some_and(|pane| pane.right_click_passthrough);
-            let git_context = pane
-                .foreground_cwd
-                .as_deref()
-                .or(pane.cwd.as_deref())
-                .and_then(|cwd| app.pane_git_contexts.get(std::path::Path::new(cwd)))
-                .and_then(|context| {
-                    context
-                        .repo
-                        .as_ref()
-                        .map(|repo| protocol::ClientShellPaneGitContext {
-                            repo: repo.clone(),
-                            worktree: context.worktree.clone(),
-                        })
-                });
+            let git_context =
+                pane.foreground_cwd
+                    .as_deref()
+                    .or(pane.cwd.as_deref())
+                    .and_then(|cwd| app.pane_git_contexts.get(std::path::Path::new(cwd)))
+                    .and_then(|context| {
+                        context.repo.as_ref().zip(context.repo_key.as_ref()).map(
+                            |(repo, repo_key)| protocol::ClientShellPaneGitContext {
+                                repo_key: repo_key.clone(),
+                                repo: repo.clone(),
+                                worktree: context.worktree.clone(),
+                            },
+                        )
+                    });
             protocol::ClientShellPane {
                 pane_id,
                 workspace_id: pane.workspace_id,
@@ -576,7 +576,7 @@ fn split_hit_rect(
 /// its workspace's own checkout. Values reported by the pane itself win.
 pub(super) fn inject_agent_git_tokens(
     tokens: &mut std::collections::HashMap<String, String>,
-    context: Option<&crate::workspace::AgentGitContext>,
+    context: Option<&crate::workspace::PaneGitContext>,
     workspace_label: &str,
     workspace_worktree: Option<&str>,
 ) {
@@ -625,8 +625,9 @@ mod tests {
             .expect("pane cwd");
         app.pane_git_contexts.insert(
             std::path::PathBuf::from(cwd),
-            crate::workspace::AgentGitContext {
+            crate::workspace::PaneGitContext {
                 repo: Some("other-repo".into()),
+                repo_key: Some("/other-repo/.git".into()),
                 worktree: Some("checkout".into()),
             },
         );
@@ -634,6 +635,7 @@ mod tests {
         assert_eq!(
             projected.panes[0].git_context,
             Some(crate::protocol::ClientShellPaneGitContext {
+                repo_key: "/other-repo/.git".into(),
                 repo: "other-repo".into(),
                 worktree: Some("checkout".into()),
             })
@@ -643,9 +645,10 @@ mod tests {
     #[test]
     fn agent_git_tokens_only_mark_panes_outside_their_workspace_checkout() {
         use super::inject_agent_git_tokens;
-        use crate::workspace::AgentGitContext;
-        let context = AgentGitContext {
+        use crate::workspace::PaneGitContext;
+        let context = PaneGitContext {
             repo: Some("herdr".into()),
+            repo_key: Some("/herdr/.git".into()),
             worktree: Some("typed-splashing-dusk".into()),
         };
 

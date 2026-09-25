@@ -324,6 +324,7 @@ fn print_split_worktree_profiles() {
             super::client_shell::snapshot(&pipeline.app, "bench-boot", 1, None, None);
         for (index, pane) in snapshot.panes.iter_mut().enumerate() {
             pane.git_context = Some(crate::protocol::ClientShellPaneGitContext {
+                repo_key: "/bench/.git".into(),
                 repo: "bench".into(),
                 worktree: Some(format!("checkout-{index}")),
             });

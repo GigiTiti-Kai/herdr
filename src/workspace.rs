@@ -79,22 +79,24 @@ pub(crate) fn discover_workspace_git_identity(
     (space, auto_label, status_cache_key)
 }
 
-/// Git context of one agent pane, derived from its foreground cwd. Used to
-/// annotate agent rows whose pane runs somewhere other than its workspace.
+/// Git context of one pane, derived from its foreground cwd.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct AgentGitContext {
+pub struct PaneGitContext {
     /// Repository label as a workspace on that checkout would show it.
     pub repo: Option<String>,
+    /// Stable identity shared by all checkouts of the same repository.
+    pub repo_key: Option<String>,
     /// Checkout directory name when the cwd is inside a linked worktree.
     pub worktree: Option<String>,
 }
 
-pub(crate) fn agent_git_context(cwd: &std::path::Path) -> AgentGitContext {
+pub(crate) fn pane_git_context(cwd: &std::path::Path) -> PaneGitContext {
     let space = git_space_metadata(cwd);
-    AgentGitContext {
+    PaneGitContext {
         repo: space
             .as_ref()
             .map(|space| self::git::automatic_space_label(cwd, space)),
+        repo_key: space.as_ref().map(|space| space.key.clone()),
         worktree: foreground_worktree_name(space.as_ref()),
     }
 }
@@ -1684,23 +1686,24 @@ mod tests {
     }
 
     #[test]
-    fn agent_git_context_reports_repo_and_worktree_for_linked_checkout() {
+    fn pane_git_context_reports_repo_and_worktree_for_linked_checkout() {
         let (base, repo, checkout) =
             self::git::test_support::create_repo_with_linked_worktree("agent-git-context");
         let repo_name = repo.file_name().unwrap().to_str().unwrap();
 
-        let in_worktree = agent_git_context(&checkout);
+        let in_worktree = pane_git_context(&checkout);
         assert_eq!(in_worktree.repo.as_deref(), Some(repo_name));
+        assert_eq!(in_worktree.repo_key, pane_git_context(&repo).repo_key);
         assert_eq!(
             in_worktree.worktree.as_deref(),
             checkout.file_name().unwrap().to_str()
         );
 
-        let on_primary = agent_git_context(&repo);
+        let on_primary = pane_git_context(&repo);
         assert_eq!(on_primary.repo.as_deref(), Some(repo_name));
         assert_eq!(on_primary.worktree, None);
 
-        assert_eq!(agent_git_context(&base), AgentGitContext::default());
+        assert_eq!(pane_git_context(&base), PaneGitContext::default());
 
         std::fs::remove_dir_all(base).unwrap();
     }

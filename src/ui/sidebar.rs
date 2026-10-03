@@ -213,15 +213,30 @@ pub(crate) fn resolved_token_spans(
         }
     }
 
-    let mut spans = Vec::new();
+    let mut spans: Vec<Span<'static>> = Vec::new();
     for (position, index) in visible_indices.iter().copied().enumerate() {
         let token = &resolved[index];
         if position > 0 {
             let previous = &resolved[visible_indices[position - 1]];
-            spans.push(Span::styled(
-                tokens::separator(previous, token),
-                Style::default().fg(palette.overlay0),
-            ));
+            let separator = tokens::separator(previous, token);
+            let separator_style = Style::default().fg(palette.overlay0);
+            // Outer terminals shape glyphs per attribute run and only let a
+            // wide glyph (an icon from a fallback font) spill into a blank
+            // that belongs to the same run. Keep the separator's leading blank
+            // in the preceding token's style; token styles carry only
+            // foreground, bold, and dim, none of which draw on a blank cell.
+            match (
+                spans.last().map(|span| span.style),
+                separator.strip_prefix(' '),
+            ) {
+                (Some(leading_style), Some(rest)) => {
+                    spans.push(Span::styled(" ", leading_style));
+                    if !rest.is_empty() {
+                        spans.push(Span::styled(rest, separator_style));
+                    }
+                }
+                _ => spans.push(Span::styled(separator, separator_style)),
+            }
         }
         match &token.kind {
             ResolvedTokenKind::StateIcon => spans.push(Span::styled(

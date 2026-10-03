@@ -885,3 +885,86 @@ pub(in crate::client::shell) fn render_workspace_rows(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn space_row_separator_blank_follows_the_preceding_token_without_new_decoration() {
+        const ICON: &str = "\u{e1aa}";
+        let config: SpacesSidebarConfig = toml::from_str(
+            r##"rows = [["state_icon", "workspace", { token = "$icon", fg = "#f9e2af" }, "branch"]]"##,
+        )
+        .unwrap();
+        let palette = Palette::catppuccin();
+        let snapshot = crate::client::shell::tests::snapshot();
+        for focused in [true, false] {
+            let mut workspace = snapshot.workspaces[0].clone();
+            workspace.focused = focused;
+            workspace.tokens = vec![("icon".into(), ICON.into())];
+            let status = crate::api::schema::AgentStatus::Idle;
+            let rows = workspace_rows(&workspace, &snapshot.panes, status, false, &config);
+            let area = Rect::new(0, 0, 40, 1);
+            let mut buffer = Buffer::empty(area);
+            render_workspace_rows(
+                &mut buffer,
+                area,
+                &workspace,
+                status,
+                crate::config::StatusIndicatorStyle::default(),
+                &WorkspaceEntry {
+                    index: 0,
+                    indented: false,
+                    last_child: false,
+                },
+                rows,
+                true,
+                false,
+                false,
+                &palette,
+            );
+            let symbols = (0..area.width)
+                .map(|x| buffer[(x, 0)].symbol().to_string())
+                .collect::<Vec<_>>();
+            assert!(
+                symbols
+                    .concat()
+                    .trim_end()
+                    .ends_with(&format!(" client-shell · {ICON} · main")),
+                "{symbols:?}"
+            );
+            let icon_x = symbols.iter().position(|symbol| symbol == ICON).unwrap() as u16;
+            let (icon, blank, dot) = (
+                &buffer[(icon_x, 0)],
+                &buffer[(icon_x + 1, 0)],
+                &buffer[(icon_x + 2, 0)],
+            );
+            assert_eq!(blank.symbol(), " ");
+            assert_eq!(blank.style(), icon.style());
+            assert_eq!(dot.symbol(), "·");
+            assert_eq!(dot.fg, palette.overlay0);
+            // The state icon's single-blank separator follows the same rule.
+            assert_eq!(buffer[(2, 0)].symbol(), " ");
+            assert_eq!(buffer[(2, 0)].style(), buffer[(1, 0)].style());
+            // Only the foreground differs from the old separator blank: every
+            // cell keeps the row background and nothing gains a decoration.
+            let expected_bg = if focused {
+                palette.active_row_bg
+            } else {
+                ratatui::style::Color::Reset
+            };
+            for x in 0..area.width {
+                let cell = &buffer[(x, 0)];
+                assert_eq!(cell.bg, expected_bg, "x={x}");
+                assert_eq!(cell.underline_color, dot.underline_color, "x={x}");
+                assert!(
+                    !cell.modifier.intersects(
+                        Modifier::REVERSED | Modifier::UNDERLINED | Modifier::CROSSED_OUT
+                    ),
+                    "x={x}"
+                );
+            }
+        }
+    }
+}

@@ -394,3 +394,130 @@ fn sidebar_status_text(status: crate::api::schema::AgentStatus) -> &'static str 
         AgentStatus::Idle | AgentStatus::Unknown => "idle",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{render_ansi::BlitEncoder, FrameData};
+
+    const ICON: &str = "\u{e1a0}";
+
+    fn rendered(rows_toml: &str, width: u16) -> (Buffer, ClientShellConfig) {
+        let sidebar: crate::config::AgentsSidebarConfig = toml::from_str(rows_toml).unwrap();
+        let tokens = HashMap::from([
+            ("icon".to_string(), ICON.to_string()),
+            ("model".to_string(), "opus-4".to_string()),
+            ("empty".to_string(), String::new()),
+        ]);
+        let rows = crate::ui::sidebar_agent_rows(
+            &sidebar,
+            crate::ui::AgentTokenContext {
+                machine: None,
+                workspace: "repo",
+                tab: None,
+                pane: None,
+                agent_label: None,
+                terminal_title: None,
+                terminal_title_stripped: None,
+                canonical_agent: None,
+                tokens: &tokens,
+            },
+            "idle",
+        );
+        let config = ClientShellConfig::from_config(&crate::config::Config::default());
+        let rect = Rect::new(0, 0, width, rows.len() as u16);
+        let mut buffer = Buffer::empty(rect);
+        let row = AgentRow {
+            pane_id: "pane_1".into(),
+            status: crate::api::schema::AgentStatus::Idle,
+            focused: true,
+            rows,
+        };
+        render_agent_row(&mut buffer, rect, &row, &config);
+        (buffer, config)
+    }
+
+    fn row_text(buffer: &Buffer, y: u16) -> String {
+        (0..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol())
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    const ICON_ROWS: &str = r##"
+rows = [[{ token = "$icon", fg = "#f9e2af", bold = false, dim = false }, { token = "$model", fg = "#e9e9f0", bold = true, dim = false }], ["state_icon", "workspace"]]
+"##;
+
+    #[test]
+    fn separator_leading_blank_stays_in_the_preceding_token_style_run() {
+        let (buffer, config) = rendered(ICON_ROWS, 30);
+        let overlay0 = config.palette.overlay0;
+        assert_eq!(row_text(&buffer, 0), format!(" {ICON} · opus-4"));
+
+        // Outer terminals shape glyphs per attribute run, so the blank after a
+        // wide icon must not start a new run.
+        let (icon, blank, dot, trailing) = (
+            &buffer[(1, 0)],
+            &buffer[(2, 0)],
+            &buffer[(3, 0)],
+            &buffer[(4, 0)],
+        );
+        assert_eq!(icon.symbol(), ICON);
+        assert_eq!(blank.symbol(), " ");
+        assert_eq!(blank.style(), icon.style());
+        assert_eq!(dot.symbol(), "·");
+        assert_eq!(dot.fg, overlay0);
+        assert_eq!(trailing.fg, overlay0);
+        assert_eq!(dot.modifier, Modifier::empty());
+        assert_eq!(trailing.style(), dot.style());
+        // Nothing with ink on a blank cell may leak into the separator.
+        assert_eq!(blank.bg, dot.bg);
+        assert_eq!(blank.underline_color, dot.underline_color);
+        assert!(!blank
+            .modifier
+            .intersects(Modifier::REVERSED | Modifier::UNDERLINED | Modifier::CROSSED_OUT));
+
+        let frame = FrameData::from_ratatui_buffer(&buffer, None);
+        let ansi = BlitEncoder::new().encode(&frame, true).bytes;
+        let ansi = String::from_utf8_lossy(&ansi);
+        let after_icon = &ansi[ansi.find(ICON).unwrap() + ICON.len()..];
+        let (before_blank, after_blank) = after_icon.split_once(' ').unwrap();
+        assert!(
+            !before_blank.contains('m'),
+            "style change between icon and blank: {before_blank:?}"
+        );
+        let before_dot = after_blank.split_once('·').unwrap().0;
+        assert!(
+            before_dot.ends_with('m'),
+            "separator colour must start after the blank: {before_dot:?}"
+        );
+
+        // The single-space separator after the state icon follows the same rule.
+        assert_eq!(buffer[(4, 1)].symbol(), " ");
+        assert_eq!(buffer[(4, 1)].style(), buffer[(3, 1)].style());
+        assert_eq!(
+            row_text(&buffer, 1)[buffer[(3, 1)].symbol().len() + 3..],
+            *" repo"
+        );
+    }
+
+    #[test]
+    fn separator_split_keeps_text_and_width_for_narrow_and_empty_tokens() {
+        // Truncated: icon + " · " + 3 cells of the model.
+        let (buffer, _) = rendered(ICON_ROWS, 8);
+        assert_eq!(row_text(&buffer, 0), format!(" {ICON} · op…"));
+        assert_eq!(buffer[(2, 0)].style(), buffer[(1, 0)].style());
+
+        // Too narrow for both: the icon is dropped and no separator is drawn.
+        let (buffer, _) = rendered(ICON_ROWS, 4);
+        assert_eq!(row_text(&buffer, 0), " op…");
+
+        // An empty token keeps both of its separators.
+        let (buffer, config) = rendered(r##"rows = [["$icon", "$empty", "$model"]]"##, 30);
+        assert_eq!(row_text(&buffer, 0), format!(" {ICON} ·  · opus-4"));
+        assert_eq!(buffer[(2, 0)].style(), buffer[(1, 0)].style());
+        assert_eq!(buffer[(3, 0)].fg, config.palette.overlay0);
+        assert_eq!(buffer[(6, 0)].fg, config.palette.overlay0);
+    }
+}

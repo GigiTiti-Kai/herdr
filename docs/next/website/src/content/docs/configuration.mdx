@@ -382,6 +382,8 @@ The symbols are static, so this option does not enable spinner animation.
 
 ### Sidebar row layouts
 
+When the active workspace has multiple tabs, Spaces shows its name followed by one clickable row per tab. Other workspaces keep their usual layout. Tab rows prefer a custom tab name, then a project name, then a recognized shell label or folder name. Worktree or agent context appears when space permits; long labels end in an ellipsis. Click a row to focus that tab, right-click for its existing tab menu, or use the usual tab keybindings. The rows scroll with Spaces. Use the arrow beside the workspace name to fold the list. A single-tab workspace keeps its configured project and worktree detail rows. Unnamed single-pane shell tabs can use recognized PowerShell or cmd terminal titles; unknown titles keep the existing fallback.
+
 The expanded desktop sidebar renders each inner array in `rows` as one line. These are the complete default layouts:
 
 ```toml

@@ -86,13 +86,39 @@ pub(super) fn snapshot(
                 .flat_map(|workspace| workspace.tabs.iter()),
         )
         .map(|(tab, state)| {
+            // A tab's display label may use a cached shell title. Do not probe
+            // processes or terminal cores while projecting the client snapshot.
+            let shell_label = state
+                .is_auto_named()
+                .then(|| {
+                    let terminal = state
+                        .terminal_id(state.root_pane)
+                        .and_then(|id| app.state.terminals.get(id))?;
+                    if terminal.effective_agent_label().is_some() || state.panes.len() != 1 {
+                        return None;
+                    }
+                    match terminal
+                        .terminal_title
+                        .as_deref()?
+                        .trim()
+                        .rsplit(['/', '\\'])
+                        .next()?
+                    {
+                        "pwsh" | "pwsh.exe" | "powershell.exe" | "Windows PowerShell" => {
+                            Some("PowerShell")
+                        }
+                        "cmd.exe" => Some("cmd"),
+                        _ => None,
+                    }
+                })
+                .flatten();
             let tab_id = tab.tab_id;
             protocol::ClientShellTab {
                 focused: focused_tab_id.as_deref() == Some(tab_id.as_str()),
                 tab_id,
                 workspace_id: tab.workspace_id,
                 number: tab.number,
-                label: tab.label,
+                label: shell_label.map(str::to_owned).unwrap_or(tab.label),
                 custom_label: !state.is_auto_named(),
                 zoomed: state.zoomed,
                 agent_status: tab.agent_status,
@@ -605,6 +631,34 @@ pub(super) fn inject_agent_git_tokens(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn snapshot_uses_a_recognizable_shell_title_for_an_unnamed_non_agent_tab() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = crate::app::App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("repo")];
+        app.state.ensure_test_terminals();
+        let id = app.state.workspaces[0].tabs[0]
+            .terminal_id(app.state.workspaces[0].tabs[0].root_pane)
+            .unwrap()
+            .clone();
+        app.state.terminals.get_mut(&id).unwrap().terminal_title =
+            Some(r"C:\Program Files\PowerShell\7\pwsh.exe".into());
+        let projected = super::snapshot(&app, "boot", 1, None, None);
+        assert_eq!(projected.tabs[0].label, "PowerShell");
+        assert!(!projected.tabs[0].custom_label);
+        app.state.workspaces[0].tabs[0].set_custom_name("deploy".into());
+        assert_eq!(
+            super::snapshot(&app, "boot", 2, None, None).tabs[0].label,
+            "deploy"
+        );
+    }
+
     #[test]
     fn snapshot_projects_cached_git_context_for_a_pane() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();

@@ -212,7 +212,23 @@ pub(crate) fn render_sidebar(
             .add_modifier(Modifier::BOLD),
     );
 
-    let entries = workspace_entries(snapshot, state.collapsed_groups);
+    let tab_rows = super::workspace_tabs::rows(snapshot);
+    let overview_id = (!tab_rows.is_empty())
+        .then_some(snapshot.focused_workspace_id.as_deref())
+        .flatten();
+    let entries = workspace_entries(snapshot, state.collapsed_groups)
+        .into_iter()
+        .flat_map(|entry| {
+            let mut rows = vec![(entry, None)];
+            let workspace = &snapshot.workspaces[entry.index];
+            if overview_id == Some(workspace.workspace_id.as_str())
+                && !state.folded_workspaces.contains(&workspace.workspace_id)
+            {
+                rows.extend((0..tab_rows.len()).map(|index| (entry, Some(index))));
+            }
+            rows
+        })
+        .collect::<Vec<_>>();
     let body = Rect::new(
         workspace_area.x,
         workspace_area.y.saturating_add(WORKSPACE_HEADER_ROWS),
@@ -224,7 +240,12 @@ pub(crate) fn render_sidebar(
     hits.workspace_body = body;
     let row_heights = entries
         .iter()
-        .map(|entry| {
+        .map(|(entry, tab)| {
+            if tab.is_some()
+                || overview_id == Some(snapshot.workspaces[entry.index].workspace_id.as_str())
+            {
+                return 1;
+            }
             snapshot
                 .workspaces
                 .get(entry.index)
@@ -249,9 +270,9 @@ pub(crate) fn render_sidebar(
         .iter()
         .enumerate()
         .map(|(index, _)| {
-            entries
-                .get(index + 1)
-                .map_or(0, |next| u16::from(!next.indented) * config.spaces.row_gap)
+            entries.get(index + 1).map_or(0, |(next, tab)| {
+                u16::from(tab.is_none() && !next.indented) * config.spaces.row_gap
+            })
         })
         .collect::<Vec<_>>();
     let mut metrics = super::scroll::list_scroll_metrics(
@@ -260,11 +281,33 @@ pub(crate) fn render_sidebar(
         body.height,
         *state.workspace_scroll,
     );
-    if !body.is_empty() && std::mem::take(state.reveal_focused_workspace) {
-        if let Some(target) = entries
-            .iter()
-            .position(|entry| snapshot.workspaces[entry.index].focused)
-        {
+    let reveal_navigation = !body.is_empty() && std::mem::take(state.reveal_navigation_workspace);
+    let reveal_focus = !body.is_empty() && std::mem::take(state.reveal_focused_workspace);
+    if reveal_navigation || reveal_focus {
+        let target = if reveal_navigation {
+            entries.iter().position(|(entry, tab)| {
+                tab.is_none()
+                    && state.selected_workspace_id.is_some_and(|target| {
+                        target.matches(
+                            state.active_endpoint_id,
+                            &snapshot.workspaces[entry.index].workspace_id,
+                        )
+                    })
+            })
+        } else {
+            entries
+                .iter()
+                .position(|(entry, tab)| {
+                    snapshot.workspaces[entry.index].focused
+                        && tab.is_some_and(|index| tab_rows[index].focused)
+                })
+                .or_else(|| {
+                    entries.iter().position(|(entry, tab)| {
+                        tab.is_none() && snapshot.workspaces[entry.index].focused
+                    })
+                })
+        };
+        if let Some(target) = target {
             *state.workspace_scroll = super::scroll::list_scroll_start_to_reveal(
                 &row_heights,
                 &gaps,
@@ -288,19 +331,37 @@ pub(crate) fn render_sidebar(
     let show_scrollbar = metrics.max_offset_from_bottom > 0 && body.width > 1;
     let content_width = body.width.saturating_sub(u16::from(show_scrollbar));
     let mut y = body.y;
-    for (entry_position, entry) in entries.iter().enumerate().skip(*state.workspace_scroll) {
+    for (entry_position, (entry, tab)) in entries.iter().enumerate().skip(*state.workspace_scroll) {
+        if let Some(index) = tab {
+            if y >= body.bottom() {
+                break;
+            }
+            super::workspace_tabs::render(
+                buffer,
+                Rect::new(body.x, y, content_width, 1),
+                &tab_rows[*index],
+                palette,
+                hits,
+            );
+            y = y.saturating_add(1 + gaps[entry_position]);
+            continue;
+        }
         let Some(workspace) = snapshot.workspaces.get(entry.index) else {
             continue;
         };
         let status = displayed_workspace_status(snapshot, workspace, state.collapsed_groups);
-        let full_rows = workspace_rows(
+        let overview = overview_id == Some(workspace.workspace_id.as_str());
+        let mut full_rows = workspace_rows(
             workspace,
-            &snapshot.panes,
+            if overview { &[] } else { &snapshot.panes },
             status,
             entry.indented,
             &config.spaces,
         );
-        let foldable = full_rows.len() > 1;
+        if overview {
+            full_rows.truncate(1);
+        }
+        let foldable = overview || full_rows.len() > 1;
         let folded = foldable && state.folded_workspaces.contains(&workspace.workspace_id);
         let rows = visible_workspace_rows(full_rows, folded);
         let row_height = (rows.len().max(1).min(u16::MAX as usize) as u16).min(body.height);
@@ -340,7 +401,7 @@ pub(crate) fn render_sidebar(
             state.collapsed_groups,
             palette,
         );
-        let detail_rect = (!folded && foldable).then(|| {
+        let detail_rect = (!overview && !folded && foldable).then(|| {
             Rect::new(
                 rect.x,
                 rect.y + 1,
@@ -348,14 +409,22 @@ pub(crate) fn render_sidebar(
                 rect.height.saturating_sub(1),
             )
         });
-        let fold_toggle = folded.then(|| {
+        let fold_toggle = (folded || overview).then(|| {
             let glyph = Rect::new(rect.right().saturating_sub(2), rect.y, 1, 1);
             put_text(
                 buffer,
                 glyph.x,
                 glyph.y,
                 glyph.width,
-                "…",
+                if overview {
+                    if folded {
+                        "▸"
+                    } else {
+                        "▾"
+                    }
+                } else {
+                    "…"
+                },
                 Style::default().fg(palette.overlay0),
             );
             glyph
@@ -369,9 +438,9 @@ pub(crate) fn render_sidebar(
             detail_rect,
             fold_toggle,
         });
-        let gap = entries
-            .get(entry_position + 1)
-            .map_or(0, |next| u16::from(!next.indented) * config.spaces.row_gap);
+        let gap = entries.get(entry_position + 1).map_or(0, |(next, tab)| {
+            u16::from(tab.is_none() && !next.indented) * config.spaces.row_gap
+        });
         y = y.saturating_add(row_height + gap);
     }
 

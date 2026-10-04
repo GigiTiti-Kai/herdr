@@ -73,6 +73,81 @@ fn state_with_remote() -> (ClientShellState, ClientEndpointId) {
     (state, endpoint_id)
 }
 
+#[test]
+fn space_tab_overview_routes_remote_rows_to_the_active_endpoint_only() {
+    let (mut state, remote) = state_with_remote();
+    for endpoint in [ClientEndpointId::Local, remote.clone()] {
+        let mut projected = snapshot();
+        let mut tab = projected.tabs[0].clone();
+        tab.tab_id = "tab_2".into();
+        tab.label = if endpoint.is_local() {
+            "local-only"
+        } else {
+            "remote-only"
+        }
+        .into();
+        tab.custom_label = true;
+        tab.focused = false;
+        projected.tabs.push(tab);
+        state.set_endpoint_snapshot(&endpoint, Box::new(projected));
+    }
+    state.folded_workspaces.insert("ws_1".into());
+    assert!(state.activate_endpoint_projection(&remote));
+    state.set_pane_surface(surface());
+    let frame = state.compose(120, 40).unwrap();
+    assert!(!frame_rows(&frame).join("\n").contains("local-only"));
+    let (x, y) = cell_symbol_position(&frame, state.hits.workspace_body, "remote-only");
+    let result = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(
+        matches!(&result.actions[..], [ClientShellAction::Endpoint { endpoint_id, request, .. }]
+        if endpoint_id == &remote && matches!(&request.method,
+            crate::api::schema::Method::TabFocus(target) if target.tab_id == "tab_2"))
+    );
+    let arrow = state
+        .hits
+        .workspaces
+        .iter()
+        .find(|hit| hit.endpoint_id == remote)
+        .and_then(|hit| hit.fold_toggle)
+        .expect("remote fold arrow");
+    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: arrow.x,
+        row: arrow.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    state.compose(120, 40).unwrap();
+    assert!(state.hits.workspace_tabs.is_empty());
+    assert!(
+        state.folded_workspaces.contains("ws_1"),
+        "remote fold must preserve Local's saved fold"
+    );
+    state.folded_workspaces.clear();
+    assert!(state.activate_endpoint_projection(&ClientEndpointId::Local));
+    state.set_pane_surface(surface());
+    let frame = state.compose(120, 40).unwrap();
+    cell_symbol_position(&frame, state.hits.workspace_body, "local-only");
+    let mut restarted = state
+        .endpoints
+        .iter()
+        .find(|entry| entry.endpoint_id == remote)
+        .unwrap()
+        .snapshot
+        .clone()
+        .unwrap();
+    restarted.boot_id = "new-remote-server".into();
+    state.set_endpoint_snapshot(&remote, restarted);
+    assert!(state.activate_endpoint_projection(&remote));
+    state.set_pane_surface(surface());
+    let frame = state.compose(120, 40).unwrap();
+    cell_symbol_position(&frame, state.hits.workspace_body, "remote-only");
+}
+
 fn state_with_scrollable_agents() -> (ClientShellState, ClientEndpointId) {
     let (mut state, remote) = state_with_remote();
     for endpoint_id in [ClientEndpointId::Local, remote.clone()] {

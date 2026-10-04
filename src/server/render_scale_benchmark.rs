@@ -164,6 +164,19 @@ fn active_panes(pane_count: usize) -> Vec<Workspace> {
     vec![workspace]
 }
 
+fn active_tabs(tab_count: usize) -> Vec<Workspace> {
+    let history = history();
+    let mut workspace = Workspace::test_new("bench-tabs");
+    for index in 1..tab_count {
+        workspace.test_add_tab(Some(&format!("project-{index}")));
+    }
+    let roots: Vec<_> = workspace.tabs.iter().map(|tab| tab.root_pane).collect();
+    for root in roots {
+        workspace.insert_test_runtime(root, runtime(&history));
+    }
+    vec![workspace]
+}
+
 fn summarize(mut samples: Vec<Duration>) -> StageStats {
     samples.sort_unstable();
     StageStats {
@@ -581,6 +594,7 @@ async fn render_scale_profile() {
     print_profiles("background workspaces (one pane each)", workspaces);
     print_snapshot_encoding_profiles("background workspaces", workspaces);
     print_profiles("active panes (one workspace)", active_panes);
+    print_profiles("tabs in active workspace (one pane each)", active_tabs);
     print_snapshot_encoding_profiles("active panes", active_panes);
     print_token_rule_profiles();
     print_split_worktree_profiles();

@@ -1797,6 +1797,7 @@ impl ClientShellState {
                     .hits
                     .tabs
                     .iter()
+                    .chain(self.hits.workspace_tabs.iter())
                     .find(|(rect, _)| super::contains(*rect, point))
                     .map(|(_, tab_id)| tab_id.clone());
                 if let Some(tab_id) = tab_id {
@@ -2060,13 +2061,25 @@ impl ClientShellState {
                                 .detail_rect
                                 .is_some_and(|rect| super::contains(rect, point))
                     })
-                    .map(|hit| hit.workspace_id.clone());
-                if let Some(workspace_id) = fold_target {
-                    if !self.folded_workspaces.remove(&workspace_id) {
-                        self.folded_workspaces.insert(workspace_id);
-                    }
+                    .map(|hit| (hit.endpoint_id.clone(), hit.workspace_id.clone()));
+                if let Some((endpoint, workspace_id)) = fold_target {
+                    self.toggle_workspace_fold(&endpoint, workspace_id);
                     outcome.repaint = true;
                     self.persist_chrome_preferences(outcome);
+                    return;
+                }
+                if let Some((_, tab_id)) = self
+                    .hits
+                    .workspace_tabs
+                    .iter()
+                    .find(|(rect, _)| super::contains(*rect, point))
+                {
+                    self.push_endpoint_method(
+                        crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
+                            tab_id: tab_id.clone(),
+                        }),
+                        outcome,
+                    );
                     return;
                 }
                 let workspace_press = self

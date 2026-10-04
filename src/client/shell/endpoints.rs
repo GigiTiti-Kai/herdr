@@ -530,6 +530,7 @@ impl ClientShellState {
             .is_some_and(|previous| previous.boot_id != snapshot.boot_id);
         if boot_changed {
             self.retire_endpoint_notifications(endpoint_id);
+            self.remote_folded_workspaces.remove(endpoint_id);
         }
         self.endpoints[index]
             .agent_presentation

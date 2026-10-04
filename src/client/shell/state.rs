@@ -90,6 +90,7 @@ pub(super) struct ShellHitMap {
     pub(super) workspace_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) workspace_max_scroll: usize,
     pub(super) tabs: Vec<(Rect, String)>,
+    pub(super) workspace_tabs: Vec<(Rect, String)>,
     pub(super) panes: Vec<PaneHit>,
     pub(super) popup: Option<PaneHit>,
     pub(super) pane_splits: Vec<PaneSplitHit>,
@@ -863,6 +864,9 @@ pub(crate) struct ClientShellState {
     pub(super) tab_press: Option<ClientTabPress>,
     pub(super) collapsed_groups: HashSet<String>,
     pub(super) folded_workspaces: HashSet<String>,
+    // Remote workspace IDs are server-local. Keep folds separate from Local's
+    // persisted preferences and from other endpoints for this client session.
+    pub(super) remote_folded_workspaces: HashMap<ClientEndpointId, HashSet<String>>,
     pub(super) remote_collapsed_groups: HashMap<ClientEndpointId, HashSet<String>>,
     pub(super) workspace_scroll: usize,
     pub(super) agent_scroll: usize,
@@ -1026,6 +1030,7 @@ impl ClientShellState {
             tab_press: None,
             collapsed_groups: preferences.collapsed_groups.into_iter().collect(),
             folded_workspaces: preferences.folded_workspaces.into_iter().collect(),
+            remote_folded_workspaces: HashMap::new(),
             remote_collapsed_groups,
             workspace_scroll: 0,
             agent_scroll: 0,
@@ -1146,6 +1151,23 @@ impl ClientShellState {
         };
         if !groups.remove(&key) {
             groups.insert(key);
+        }
+    }
+
+    pub(super) fn toggle_workspace_fold(
+        &mut self,
+        endpoint: &ClientEndpointId,
+        workspace_id: String,
+    ) {
+        let folded = if endpoint.is_local() {
+            &mut self.folded_workspaces
+        } else {
+            self.remote_folded_workspaces
+                .entry(endpoint.clone())
+                .or_default()
+        };
+        if !folded.remove(&workspace_id) {
+            folded.insert(workspace_id);
         }
     }
 
@@ -1403,6 +1425,7 @@ impl ClientShellState {
                 != snapshot.focused_tab_id.as_deref()
         {
             self.reveal_focused_tab = true;
+            self.reveal_focused_workspace = true;
         }
         let selection_focus_lost = if let Some(gesture) = self.word_selection_gesture.as_mut() {
             let focused_pane = snapshot.focused_pane_id.as_deref();

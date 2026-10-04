@@ -1,6 +1,132 @@
 use super::*;
 
 #[test]
+fn space_tab_overview_lists_background_projects_and_focuses_the_clicked_tab() {
+    let mut projected = snapshot();
+    projected.panes[0].git_context = Some(crate::protocol::ClientShellPaneGitContext {
+        repo_key: "/scheduler/.git".into(),
+        repo: "scheduler".into(),
+        worktree: None,
+    });
+    let mut tab = projected.tabs[0].clone();
+    tab.tab_id = "tab_shell".into();
+    tab.label = "PowerShell".into();
+    tab.custom_label = true;
+    tab.focused = false;
+    projected.tabs.push(tab);
+    let mut tab = projected.tabs[0].clone();
+    tab.tab_id = "tab_prompts".into();
+    tab.label = "prompts-box".into();
+    tab.custom_label = true;
+    tab.focused = false;
+    projected.tabs.push(tab);
+    let mut tab = projected.tabs[0].clone();
+    tab.tab_id = "tab_background".into();
+    tab.number = 7;
+    tab.label = "4".into();
+    tab.focused = false;
+    projected.tabs.push(tab);
+    let mut pane = projected.panes[0].clone();
+    pane.pane_id = "pane_background".into();
+    pane.tab_id = "tab_background".into();
+    pane.focused = false;
+    pane.git_context.as_mut().unwrap().repo = "herdr".into();
+    pane.git_context.as_mut().unwrap().repo_key = "/herdr/.git".into();
+    projected.panes.push(pane);
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    let frame = state.compose(120, 40).expect("frame");
+    let body = state.hits.workspace_body;
+    let (x, y) = cell_symbol_position(&frame, body, "herdr");
+    cell_symbol_position(&frame, body, "scheduler");
+    cell_symbol_position(&frame, body, "PowerShell");
+    if let Some(path) = std::env::var_os("HERDR_TAB_OVERVIEW_PREVIEW") {
+        std::fs::write(path, serde_json::to_vec(&frame).unwrap()).unwrap();
+    }
+    let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(
+        matches!(&outcome.actions[..], [ClientShellAction::Endpoint { request, .. }]
+        if matches!(&request.method, crate::api::schema::Method::TabFocus(target) if target.tab_id == "tab_background"))
+    );
+    assert!(
+        state.folded_workspaces.is_empty(),
+        "tab clicks must not fold the workspace"
+    );
+    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: x,
+        row: y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(
+        matches!(&state.overlay, Some(ClientShellOverlay::ContextMenu(menu))
+        if matches!(&menu.target, ClientContextMenuTarget::Tab { tab_id, .. } if tab_id == "tab_background"))
+    );
+    state.overlay = None;
+    let arrow = state.hits.workspaces[0].fold_toggle.expect("fold arrow");
+    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: arrow.x,
+        row: arrow.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    state.compose(120, 40).unwrap();
+    assert!(state.hits.workspace_tabs.is_empty());
+    assert!(state.folded_workspaces.contains("ws_1"));
+}
+
+#[test]
+fn space_tab_overview_scrolls_long_lists_and_never_expands_inactive_spaces() {
+    let mut projected = snapshot();
+    projected.tabs.extend((2..=18).map(|number| ClientShellTab {
+        tab_id: format!("tab_{number}"),
+        workspace_id: "ws_1".into(),
+        number,
+        label: format!("task-{number}"),
+        custom_label: true,
+        zoomed: false,
+        focused: false,
+        agent_status: AgentStatus::Idle,
+    }));
+    let mut other = projected.workspaces[0].clone();
+    other.workspace_id = "ws_other".into();
+    other.label = "another-space".into();
+    other.focused = false;
+    projected.workspaces.push(other);
+    projected.tabs.extend((1..=2).map(|number| ClientShellTab {
+        tab_id: format!("other_{number}"),
+        workspace_id: "ws_other".into(),
+        number,
+        label: "do-not-expand".into(),
+        custom_label: true,
+        zoomed: false,
+        focused: false,
+        agent_status: AgentStatus::Idle,
+    }));
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    state.compose(100, 20).unwrap();
+    state.workspace_scroll = usize::MAX;
+    let frame = state.compose(100, 20).unwrap();
+    cell_symbol_position(&frame, state.hits.workspace_body, "task-18");
+    assert!(!frame_text(&frame).contains("do-not-expand"));
+    // Keyboard workspace navigation must also account for the inserted tab rows.
+    state.mode = ClientShellMode::Navigate;
+    state.navigate_workspace_id = state.navigation_target(&ClientEndpointId::Local, "ws_other");
+    state.workspace_scroll = 0;
+    state.reveal_navigation_workspace = true;
+    let frame = state.compose(100, 20).unwrap();
+    cell_symbol_position(&frame, state.hits.workspace_body, "another-space");
+}
+
+#[test]
 fn mouse_hits_use_stable_workspace_tab_and_pane_ids() {
     let config = ClientShellConfig::from_config(&Config::default());
     let mut state = ClientShellState::new(config);

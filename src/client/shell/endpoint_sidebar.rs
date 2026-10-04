@@ -1,6 +1,21 @@
 use super::render::{display_width, put_right_text, put_text, ShellRenderState};
 use super::*;
 
+fn workspace_folded(
+    state: &ShellRenderState<'_>,
+    endpoint: &ClientEndpointId,
+    workspace_id: &str,
+) -> bool {
+    if endpoint.is_local() {
+        state.folded_workspaces.contains(workspace_id)
+    } else {
+        state
+            .remote_folded_workspaces
+            .get(endpoint)
+            .is_some_and(|folded| folded.contains(workspace_id))
+    }
+}
+
 fn collapsed_groups_for_endpoint<'a>(
     state: &'a ShellRenderState<'_>,
     endpoint_id: &ClientEndpointId,
@@ -247,9 +262,18 @@ pub(super) fn render_expanded(
     );
 
     let empty_collapsed_groups = HashSet::new();
+    let tab_rows = active_snapshot
+        .map(super::workspace_tabs::rows)
+        .unwrap_or_default();
+    let overview_id = if tab_rows.is_empty() {
+        None
+    } else {
+        active_snapshot.and_then(|snapshot| snapshot.focused_workspace_id.as_deref())
+    };
 
     enum Row {
         Endpoint(usize),
+        Tab(usize),
         Workspace {
             endpoint: usize,
             entry: WorkspaceEntry,
@@ -264,14 +288,19 @@ pub(super) fn render_expanded(
         if let Some(snapshot) = endpoint.snapshot.as_deref() {
             let collapsed_groups = collapsed_groups_for_endpoint(state, &endpoint.endpoint_id)
                 .unwrap_or(&empty_collapsed_groups);
-            rows.extend(
-                super::sidebar::workspace_entries(snapshot, collapsed_groups)
-                    .into_iter()
-                    .map(|entry| Row::Workspace {
-                        endpoint: endpoint_index,
-                        entry,
-                    }),
-            );
+            for entry in super::sidebar::workspace_entries(snapshot, collapsed_groups) {
+                let workspace = &snapshot.workspaces[entry.index];
+                rows.push(Row::Workspace {
+                    endpoint: endpoint_index,
+                    entry,
+                });
+                if &endpoint.endpoint_id == state.active_endpoint_id
+                    && overview_id == Some(workspace.workspace_id.as_str())
+                    && !workspace_folded(state, &endpoint.endpoint_id, &workspace.workspace_id)
+                {
+                    rows.extend((0..tab_rows.len()).map(Row::Tab));
+                }
+            }
         }
     }
     let body = Rect::new(
@@ -286,7 +315,7 @@ pub(super) fn render_expanded(
     let row_heights = rows
         .iter()
         .map(|row| match row {
-            Row::Endpoint(_) => 1,
+            Row::Endpoint(_) | Row::Tab(_) => 1,
             Row::Workspace { endpoint, entry } => {
                 let endpoint = &state.endpoints[*endpoint];
                 let collapsed_groups = collapsed_groups_for_endpoint(state, &endpoint.endpoint_id)
@@ -296,6 +325,11 @@ pub(super) fn render_expanded(
                     .as_deref()
                     .and_then(|snapshot| {
                         let workspace = snapshot.workspaces.get(entry.index)?;
+                        if &endpoint.endpoint_id == state.active_endpoint_id
+                            && overview_id == Some(workspace.workspace_id.as_str())
+                        {
+                            return Some(1);
+                        }
                         Some(
                             super::sidebar::workspace_rows(
                                 workspace,
@@ -328,6 +362,9 @@ pub(super) fn render_expanded(
                     entry,
                 }),
             ) if endpoint == next_endpoint => u16::from(!entry.indented) * config.spaces.row_gap,
+            (Row::Tab(_), Some(Row::Workspace { entry, .. })) => {
+                u16::from(!entry.indented) * config.spaces.row_gap
+            }
             _ => 0,
         })
         .collect::<Vec<_>>();
@@ -335,6 +372,7 @@ pub(super) fn render_expanded(
     let reveal_focus = !body.is_empty() && std::mem::take(state.reveal_focused_workspace);
     if reveal_navigation || reveal_focus {
         let selected_row = rows.iter().position(|row| match row {
+            Row::Tab(index) => !reveal_navigation && tab_rows[*index].focused,
             Row::Workspace { endpoint, entry } => {
                 let endpoint = &state.endpoints[*endpoint];
                 endpoint
@@ -347,7 +385,13 @@ pub(super) fn render_expanded(
                                 target.matches(&endpoint.endpoint_id, &workspace.workspace_id)
                             })
                         } else {
-                            &endpoint.endpoint_id == state.active_endpoint_id
+                            (tab_rows.is_empty()
+                                || workspace_folded(
+                                    state,
+                                    &endpoint.endpoint_id,
+                                    &workspace.workspace_id,
+                                ))
+                                && &endpoint.endpoint_id == state.active_endpoint_id
                                 && active_snapshot.is_some_and(|snapshot| {
                                     snapshot.focused_workspace_id.as_deref()
                                         == Some(workspace.workspace_id.as_str())
@@ -383,6 +427,14 @@ pub(super) fn render_expanded(
     let mut y = body.y;
     for (row_index, row) in rows.iter().enumerate().skip(*state.workspace_scroll) {
         match row {
+            Row::Tab(index) => {
+                if y >= body.bottom() {
+                    break;
+                }
+                let rect = Rect::new(body.x + 2, y, content_width.saturating_sub(2), 1);
+                super::workspace_tabs::render(buffer, rect, &tab_rows[*index], palette, hits);
+                y = y.saturating_add(1 + gaps.get(row_index).copied().unwrap_or(0));
+            }
             Row::Endpoint(index) => {
                 if y >= body.bottom() {
                     break;
@@ -428,13 +480,18 @@ pub(super) fn render_expanded(
                     workspace,
                     collapsed_groups,
                 );
-                let tokens = super::sidebar::workspace_rows(
+                let overview = &endpoint.endpoint_id == state.active_endpoint_id
+                    && overview_id == Some(workspace.workspace_id.as_str());
+                let mut tokens = super::sidebar::workspace_rows(
                     workspace,
-                    &snapshot.panes,
+                    if overview { &[] } else { &snapshot.panes },
                     status,
                     entry.indented,
                     &config.spaces,
                 );
+                if overview {
+                    tokens.truncate(1);
+                }
                 let height = (tokens.len().max(1).min(u16::MAX as usize) as u16).min(body.height);
                 if y.saturating_add(height) > body.bottom() {
                     break;
@@ -482,6 +539,22 @@ pub(super) fn render_expanded(
                     collapsed_groups,
                     palette,
                 );
+                let fold_toggle = overview.then(|| {
+                    let rect = Rect::new(rect.right().saturating_sub(2), rect.y, 1, 1);
+                    put_text(
+                        buffer,
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        if workspace_folded(state, &endpoint.endpoint_id, &workspace.workspace_id) {
+                            "▸"
+                        } else {
+                            "▾"
+                        },
+                        Style::default().fg(palette.overlay0),
+                    );
+                    rect
+                });
                 hits.workspaces.push(WorkspaceHit {
                     rect,
                     endpoint_id: endpoint.endpoint_id.clone(),
@@ -489,7 +562,7 @@ pub(super) fn render_expanded(
                     indented: entry.indented,
                     group_toggle,
                     detail_rect: None,
-                    fold_toggle: None,
+                    fold_toggle,
                 });
                 y = y
                     .saturating_add(height)

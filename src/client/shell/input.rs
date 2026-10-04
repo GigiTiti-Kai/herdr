@@ -722,9 +722,10 @@ impl ClientShellState {
             match code {
                 KeyCode::Char(' ') => {
                     if let Some(workspace_id) = self.navigate_workspace_id.clone() {
-                        if !self.folded_workspaces.remove(&workspace_id.workspace_id) {
-                            self.folded_workspaces.insert(workspace_id.workspace_id);
-                        }
+                        self.toggle_workspace_fold(
+                            &workspace_id.endpoint_id,
+                            workspace_id.workspace_id,
+                        );
                         self.persist_chrome_preferences(outcome);
                     }
                     outcome.repaint = true;

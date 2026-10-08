@@ -962,6 +962,107 @@ fn aggregate_agents_use_configured_rows_machine_token_and_status_colors() {
 }
 
 #[test]
+fn aggregate_agent_footer_follows_aggregate_display_order() {
+    use crate::api::schema::AgentStatus;
+
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    config.ui.sidebar.agents.footer = vec![vec![crate::config::AgentSidebarToken::Custom(
+        "acct".into(),
+    )]];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    let profile = remote_profile();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+
+    let mut local = snapshot();
+    let mut local_agent = agent("local agent", AgentStatus::Idle, 1);
+    local_agent.tokens = vec![("acct".into(), "acct-local".into())];
+    local.agents = vec![local_agent];
+    state.set_snapshot(Box::new(local));
+    state.set_pane_surface(surface());
+    let mut remote = snapshot();
+    remote.boot_id = "remote-boot".into();
+    let mut remote_agent = agent("remote agent", AgentStatus::Blocked, 1);
+    remote_agent.tokens = vec![("acct".into(), "acct-remote".into())];
+    remote.agents = vec![remote_agent];
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+
+    let frame = state.compose(100, 28).expect("combined endpoint frame");
+    let toggle = state.hits.sidebar_toggle;
+    assert_eq!(state.hits.agent_body.bottom() + 1, toggle.bottom());
+    let rows = frame_rows(&frame);
+    assert!(
+        rows[toggle.y as usize].contains("acct-remote"),
+        "blocked remote agent is first in priority order: {}",
+        rows[toggle.y as usize]
+    );
+    assert!(!rows.join("\n").contains("acct-local"));
+    assert!(!state.hits.endpoint_agents.is_empty());
+}
+
+#[test]
+fn stale_endpoint_never_supplies_agent_footer_rows() {
+    use crate::api::schema::AgentStatus;
+
+    // Grouped order keeps endpoint order, so the stale local endpoint leads.
+    let footer_state = |live_has_token: bool| {
+        let mut config = Config::default();
+        config.ui.sidebar.agents.footer = vec![vec![crate::config::AgentSidebarToken::Custom(
+            "acct".into(),
+        )]];
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+        let profile = remote_profile();
+        let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+        state.set_endpoint_catalog(&[profile]);
+        state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+
+        let mut local = snapshot();
+        let mut local_agent = agent("local agent", AgentStatus::Idle, 1);
+        local_agent.tokens = vec![("acct".into(), "acct-stale".into())];
+        local.agents = vec![local_agent];
+        state.set_snapshot(Box::new(local));
+        state.set_pane_surface(surface());
+        let mut remote = snapshot();
+        remote.boot_id = "remote-boot".into();
+        let mut remote_agent = agent("remote agent", AgentStatus::Idle, 1);
+        if live_has_token {
+            remote_agent.tokens = vec![("acct".into(), "acct-live".into())];
+        }
+        remote.agents = vec![remote_agent];
+        state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+        state.mark_endpoint_disconnected(&ClientEndpointId::Local);
+        state
+    };
+
+    let mut state = footer_state(true);
+    let frame = state.compose(100, 28).expect("combined endpoint frame");
+    assert_eq!(
+        state.hits.endpoint_agents.first().map(|hit| &hit.1),
+        Some(&ClientEndpointId::Local),
+        "stale local agent is first in display order"
+    );
+    let toggle = state.hits.sidebar_toggle;
+    let rows = frame_rows(&frame);
+    assert!(
+        rows[toggle.y as usize].contains("acct-live"),
+        "live endpoint supplies the footer: {}",
+        rows[toggle.y as usize]
+    );
+    assert!(!rows.join("\n").contains("acct-stale"));
+
+    let mut state = footer_state(false);
+    let frame = state.compose(100, 28).expect("combined endpoint frame");
+    assert_eq!(
+        state.hits.agent_body.bottom(),
+        state.hits.sidebar_toggle.bottom(),
+        "no footer row when only the stale endpoint has the token"
+    );
+    assert!(!frame_rows(&frame).join("\n").contains("acct-stale"));
+}
+
+#[test]
 fn current_workspace_agent_view_excludes_same_workspace_id_on_other_machine() {
     use crate::api::schema::AgentStatus;
     use crate::config::AgentSidebarToken;

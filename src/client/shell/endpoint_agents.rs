@@ -62,10 +62,18 @@ pub(super) fn render_expanded(
         return;
     }
     let rows = agent_rows(endpoints, active_endpoint_id, config);
+    let footer = crate::ui::sidebar_agent_footer_rows(
+        config.agents.footer.len(),
+        // Stale endpoints hold frozen values that would look live in the footer.
+        rows.iter()
+            .filter(|row| !row.stale)
+            .map(|row| row.agent.footer.as_slice()),
+    );
     super::agent_sidebar::render_agent_list(
         buffer,
         area,
         &rows,
+        &footer,
         agent_view_label.map(|_| " no matching agents"),
         config,
         agent_scroll,

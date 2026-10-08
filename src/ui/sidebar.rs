@@ -103,6 +103,19 @@ pub(crate) fn agent_panel_entries_from(
     entries
 }
 
+/// How adjacent resolved tokens are joined on one line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TokenJoin {
+    /// Contextual separators: `" "` after a state icon or before git status, else `" · "`.
+    Separator,
+    /// One blank between every pair of tokens (Agent panel footer rows).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by the Agent panel footer rendering commit")
+    )]
+    Space,
+}
+
 pub(crate) fn resolved_token_spans(
     resolved: &[ResolvedToken],
     state_icon: (&str, Style),
@@ -112,7 +125,12 @@ pub(crate) fn resolved_token_spans(
     custom_style: Style,
     palette: &Palette,
     max_width: usize,
+    join: TokenJoin,
 ) -> Vec<Span<'static>> {
+    let join_separator = |previous: &ResolvedToken, current: &ResolvedToken| match join {
+        TokenJoin::Separator => tokens::separator(previous, current),
+        TokenJoin::Space => " ",
+    };
     let fixed_widths = resolved
         .iter()
         .map(|token| match &token.kind {
@@ -153,7 +171,7 @@ pub(crate) fn resolved_token_spans(
             .sum::<usize>();
         let separators = indices
             .windows(2)
-            .map(|pair| display_width(tokens::separator(&resolved[pair[0]], &resolved[pair[1]])))
+            .map(|pair| display_width(join_separator(&resolved[pair[0]], &resolved[pair[1]])))
             .sum::<usize>();
         content + separators
     };
@@ -218,7 +236,7 @@ pub(crate) fn resolved_token_spans(
         let token = &resolved[index];
         if position > 0 {
             let previous = &resolved[visible_indices[position - 1]];
-            let separator = tokens::separator(previous, token);
+            let separator = join_separator(previous, token);
             let separator_style = Style::default().fg(palette.overlay0);
             // Outer terminals shape glyphs per attribute run and only let a
             // wide glyph (an icon from a fallback font) spill into a blank

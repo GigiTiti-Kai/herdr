@@ -71,63 +71,124 @@ pub(crate) fn agent_rows(
     context: AgentTokenContext<'_>,
     state_text: &str,
 ) -> Vec<Vec<ResolvedToken>> {
-    let title_token = |value: &str| {
-        let unnamed_codex = context.canonical_agent == Some(crate::detect::Agent::Codex)
-            && value.len() == 36
-            && value.bytes().enumerate().all(|(i, byte)| match i {
-                8 | 13 | 18 | 23 => byte == b'-',
-                _ => byte.is_ascii_hexdigit(),
-            });
-        ResolvedTokenKind::TerminalTitle(if unnamed_codex { "CODEX" } else { value }.to_string())
-    };
     config
         .rows_for_agent(context.canonical_agent)
         .iter()
-        .filter_map(|row| {
-            let resolved = row
-                .iter()
-                .filter_map(|configured| {
-                    let (token, style) = configured.parts();
-                    let kind = match token {
-                        AgentSidebarToken::StateIcon => Some(ResolvedTokenKind::StateIcon),
-                        AgentSidebarToken::StateText => {
-                            Some(ResolvedTokenKind::StateText(state_text.to_string()))
-                        }
-                        AgentSidebarToken::Machine => context
-                            .machine
-                            .map(|value| ResolvedTokenKind::Machine(value.to_string())),
-                        AgentSidebarToken::Workspace => {
-                            Some(ResolvedTokenKind::Workspace(context.workspace.to_string()))
-                        }
-                        AgentSidebarToken::Tab => context
-                            .tab
-                            .map(|value| ResolvedTokenKind::Tab(value.to_string())),
-                        AgentSidebarToken::Pane => context
-                            .pane
-                            .map(|value| ResolvedTokenKind::Pane(value.to_string())),
-                        AgentSidebarToken::Agent => context
-                            .agent_label
-                            .map(|value| ResolvedTokenKind::Agent(value.to_string())),
-                        AgentSidebarToken::TerminalTitle => context.terminal_title.map(title_token),
-                        AgentSidebarToken::TerminalTitleStripped => {
-                            context.terminal_title_stripped.map(title_token)
-                        }
-                        AgentSidebarToken::Custom(name) => context
-                            .tokens
-                            .get(name)
-                            .cloned()
-                            .map(ResolvedTokenKind::Custom),
-                        AgentSidebarToken::Styled { .. } => None,
-                    }?;
-                    let style = kind
-                        .text_value()
-                        .map_or(Some(style), |value| configured.style_for_value(value))?;
-                    Some(ResolvedToken::new(kind, style))
-                })
-                .collect::<Vec<_>>();
-            (!resolved.is_empty()).then_some(resolved)
+        .map(|row| resolve_agent_row(row, &context, state_text))
+        .filter(|resolved| !resolved.is_empty())
+        .collect()
+}
+
+/// One entry per configured footer row, resolved against this agent only and
+/// kept in position even when empty. `state_icon` never resolves in a footer:
+/// it is always present, so it would make every agent claim every row.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into the Agent panel by the footer rendering commit"
+    )
+)]
+pub(crate) fn agent_footer_candidates(
+    footer: &[Vec<AgentSidebarToken>],
+    context: &AgentTokenContext<'_>,
+    state_text: &str,
+) -> Vec<Vec<ResolvedToken>> {
+    footer
+        .iter()
+        .map(|row| {
+            let mut resolved = resolve_agent_row(row, context, state_text);
+            resolved.retain(|token| token.kind != ResolvedTokenKind::StateIcon);
+            resolved
         })
         .collect()
+}
+
+/// Footer rows for the panel. Each row comes whole from the first agent, in
+/// display order, that resolved any of its tokens, so values from different
+/// panes never mix in one row. Rows no agent resolves are dropped.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into the Agent panel by the footer rendering commit"
+    )
+)]
+pub(crate) fn agent_footer_rows<'a>(
+    row_count: usize,
+    candidates_in_display_order: impl IntoIterator<Item = &'a [Vec<ResolvedToken>]>,
+) -> Vec<Vec<ResolvedToken>> {
+    let mut picked: Vec<Option<&'a Vec<ResolvedToken>>> = vec![None; row_count];
+    for candidate in candidates_in_display_order {
+        if picked.iter().all(Option::is_some) {
+            break;
+        }
+        for (slot, row) in picked.iter_mut().zip(candidate) {
+            if slot.is_none() && !row.is_empty() {
+                *slot = Some(row);
+            }
+        }
+    }
+    picked.into_iter().flatten().cloned().collect()
+}
+
+fn resolve_agent_row(
+    row: &[AgentSidebarToken],
+    context: &AgentTokenContext<'_>,
+    state_text: &str,
+) -> Vec<ResolvedToken> {
+    row.iter()
+        .filter_map(|configured| {
+            let (token, style) = configured.parts();
+            let kind = match token {
+                AgentSidebarToken::StateIcon => Some(ResolvedTokenKind::StateIcon),
+                AgentSidebarToken::StateText => {
+                    Some(ResolvedTokenKind::StateText(state_text.to_string()))
+                }
+                AgentSidebarToken::Machine => context
+                    .machine
+                    .map(|value| ResolvedTokenKind::Machine(value.to_string())),
+                AgentSidebarToken::Workspace => {
+                    Some(ResolvedTokenKind::Workspace(context.workspace.to_string()))
+                }
+                AgentSidebarToken::Tab => context
+                    .tab
+                    .map(|value| ResolvedTokenKind::Tab(value.to_string())),
+                AgentSidebarToken::Pane => context
+                    .pane
+                    .map(|value| ResolvedTokenKind::Pane(value.to_string())),
+                AgentSidebarToken::Agent => context
+                    .agent_label
+                    .map(|value| ResolvedTokenKind::Agent(value.to_string())),
+                AgentSidebarToken::TerminalTitle => context
+                    .terminal_title
+                    .map(|value| title_token(context, value)),
+                AgentSidebarToken::TerminalTitleStripped => context
+                    .terminal_title_stripped
+                    .map(|value| title_token(context, value)),
+                AgentSidebarToken::Custom(name) => context
+                    .tokens
+                    .get(name)
+                    .cloned()
+                    .map(ResolvedTokenKind::Custom),
+                AgentSidebarToken::Styled { .. } => None,
+            }?;
+            let style = kind
+                .text_value()
+                .map_or(Some(style), |value| configured.style_for_value(value))?;
+            Some(ResolvedToken::new(kind, style))
+        })
+        .collect()
+}
+
+fn title_token(context: &AgentTokenContext<'_>, value: &str) -> ResolvedTokenKind {
+    let unnamed_codex = context.canonical_agent == Some(crate::detect::Agent::Codex)
+        && value.len() == 36
+        && value.bytes().enumerate().all(|(i, byte)| match i {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        });
+    ResolvedTokenKind::TerminalTitle(if unnamed_codex { "CODEX" } else { value }.to_string())
 }
 
 pub(crate) struct SpaceTokenContext<'a> {
@@ -244,6 +305,110 @@ mod tests {
         }
     }
 
+    fn parse_footer(rows: &str) -> Vec<Vec<AgentSidebarToken>> {
+        toml::from_str::<AgentsSidebarConfig>(&format!("footer = {rows}"))
+            .expect("footer rows")
+            .footer
+    }
+
+    fn with_tokens(pairs: &[(&str, &str)]) -> Entry {
+        let mut entry = entry();
+        entry.tokens = pairs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        entry
+    }
+
+    fn custom(value: &str) -> ResolvedToken {
+        ResolvedToken::unstyled(ResolvedTokenKind::Custom(value.into()))
+    }
+
+    fn footer_for(footer: &[Vec<AgentSidebarToken>], agents: &[&Entry]) -> Vec<Vec<ResolvedToken>> {
+        let candidates = agents
+            .iter()
+            .map(|entry| agent_footer_candidates(footer, &context(entry), "idle"))
+            .collect::<Vec<_>>();
+        agent_footer_rows(footer.len(), candidates.iter().map(Vec::as_slice))
+    }
+
+    #[test]
+    fn footer_rows_come_whole_from_the_first_agent_that_resolves_them() {
+        let footer = parse_footer(r#"[["$title"], ["$a", "$b"], ["$missing"], ["$c"]]"#);
+        let first = with_tokens(&[("a", "A1")]);
+        let second = with_tokens(&[("title", "T2"), ("a", "A2"), ("b", "B2"), ("c", "C2")]);
+
+        assert_eq!(
+            footer_for(&footer, &[&first, &second]),
+            vec![vec![custom("T2")], vec![custom("A1")], vec![custom("C2")]],
+            "row [$a $b] belongs to the first agent alone; B2 must not be mixed in"
+        );
+        assert_eq!(
+            footer_for(&footer, &[&second, &first])[1],
+            vec![custom("A2"), custom("B2")]
+        );
+    }
+
+    #[test]
+    fn footer_skips_state_icon_so_it_never_claims_a_row() {
+        let footer = parse_footer(r#"[["state_icon", "$a"], ["state_icon"]]"#);
+        let first = entry();
+        let second = with_tokens(&[("a", "A2")]);
+
+        assert_eq!(
+            agent_footer_candidates(&footer, &context(&first), "idle"),
+            vec![Vec::new(), Vec::new()]
+        );
+        assert_eq!(
+            footer_for(&footer, &[&first, &second]),
+            vec![vec![custom("A2")]]
+        );
+    }
+
+    #[test]
+    fn footer_hide_rules_let_a_later_agent_supply_the_row() {
+        let footer =
+            parse_footer(r#"[[{ token = "$a", rules = [{ equals = "hidden", hide = true }] }]]"#);
+        let first = with_tokens(&[("a", "hidden")]);
+        let second = with_tokens(&[("a", "shown")]);
+
+        assert_eq!(
+            footer_for(&footer, &[&first, &second]),
+            vec![vec![custom("shown")]]
+        );
+    }
+
+    #[test]
+    fn empty_footer_or_no_agents_resolve_no_rows() {
+        let entry = with_tokens(&[("a", "A")]);
+        assert!(footer_for(&[], &[&entry]).is_empty());
+        assert!(footer_for(&parse_footer(r#"[["$a"]]"#), &[]).is_empty());
+    }
+
+    #[test]
+    fn space_join_uses_one_blank_between_tokens() {
+        let tokens = [custom("5h 0%"), custom("7d 24%")];
+        let style = ratatui::style::Style::default();
+        let text = |join| {
+            super::super::resolved_token_spans(
+                &tokens,
+                ("", style),
+                style,
+                style,
+                style,
+                style,
+                &super::super::Palette::catppuccin(),
+                40,
+                join,
+            )
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>()
+        };
+        assert_eq!(text(super::super::TokenJoin::Space), "5h 0% 7d 24%");
+        assert_eq!(text(super::super::TokenJoin::Separator), "5h 0% · 7d 24%");
+    }
+
     #[test]
     fn conditional_styles_merge_first_match_and_keep_missing_values_absent() {
         let config: AgentsSidebarConfig = toml::from_str(r##"
@@ -297,6 +462,7 @@ rows = [[{ token = "workspace", rules = [{ equals = "long-workspace-name", fg = 
                 theme,
                 &super::super::Palette::catppuccin(),
                 width,
+                super::super::TokenJoin::Separator,
             );
             assert_eq!(spans.len(), 1);
             assert!(super::super::display_width(&spans[0].content) <= width);

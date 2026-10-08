@@ -430,6 +430,11 @@ pub struct AgentsSidebarConfig {
     #[serde(default, deserialize_with = "deserialize_rows_by_agent")]
     pub rows_by_agent: BTreeMap<String, AgentSidebarRows>,
     pub row_gap: u16,
+    /// Rows pinned to the bottom of the expanded Agent panel. Same syntax and
+    /// limits as `rows`; each row is resolved whole from the first agent in
+    /// panel order that reports any of its tokens.
+    #[serde(deserialize_with = "deserialize_sidebar_rows")]
+    pub footer: AgentSidebarRows,
 }
 
 impl AgentsSidebarConfig {
@@ -454,6 +459,7 @@ impl Default for AgentsSidebarConfig {
             ],
             rows_by_agent: BTreeMap::new(),
             row_gap: DEFAULT_SIDEBAR_ROW_GAP,
+            footer: Vec::new(),
         }
     }
 }
@@ -514,6 +520,7 @@ mod tests {
             ]
         );
         assert_eq!(config.spaces.row_gap, 0);
+        assert!(config.agents.footer.is_empty());
     }
 
     #[test]
@@ -617,6 +624,7 @@ rows = [[{ token = "git_status", fg = "#ff00aa" }], [{ token = "$jj", bold = tru
         let input = r##"
 [agents]
 rows = [[{ token = "machine", fg = "#fff", rules = [{ equals = "Local", fg = "#f00" }, { starts_with = "fed", ignore_case = true, bold = true }] }]]
+footer = [["$usage_title"], [{ token = "$usage_5h", rules = [{ contains = "9", bold = true }] }, "$usage_reset"]]
 [agents.rows_by_agent]
 pi = [[{ token = "$load", rules = [{ gt = 80, dim = false }, { lt = 20.5, dim = true }] }]]
 [spaces]
@@ -626,6 +634,59 @@ rows = [[{ token = "$status", rules = [{ contains = "error", bold = true }] }]]
         let encoded = toml::to_string(&config).unwrap();
         assert!(encoded.contains("rules"));
         assert_eq!(toml::from_str::<SidebarConfig>(&encoded).unwrap(), config);
+    }
+
+    #[test]
+    fn parses_agent_footer_rows_with_row_syntax() {
+        let config: crate::config::Config = toml::from_str(
+            r##"
+[ui.sidebar.agents]
+footer = [["$usage_title"], [{ token = "$usage_5h", fg = "#f00", rules = [{ contains = "9", bold = true }] }, "state_icon", "machine"]]
+"##,
+        )
+        .expect("footer config");
+
+        let footer = &config.ui.sidebar.agents.footer;
+        assert_eq!(footer.len(), 2);
+        assert_eq!(
+            footer[0],
+            vec![AgentSidebarToken::Custom("usage_title".into())]
+        );
+        let (token, style) = footer[1][0].parts();
+        assert_eq!(token, &AgentSidebarToken::Custom("usage_5h".into()));
+        assert_eq!(
+            style.fg.unwrap().ratatui(),
+            ratatui::style::Color::Rgb(0xff, 0x00, 0x00)
+        );
+        assert_eq!(
+            footer[1][1..],
+            [AgentSidebarToken::StateIcon, AgentSidebarToken::Machine]
+        );
+        assert_eq!(
+            config.ui.sidebar.agents.rows,
+            AgentsSidebarConfig::default().rows
+        );
+    }
+
+    #[test]
+    fn rejects_oversized_or_malformed_agent_footers() {
+        let too_many_rows = std::iter::repeat_n("[\"$x\"]", MAX_SIDEBAR_ROWS + 1)
+            .collect::<Vec<_>>()
+            .join(",");
+        let too_many_tokens = std::iter::repeat_n("\"$x\"", MAX_SIDEBAR_TOKENS_PER_ROW + 1)
+            .collect::<Vec<_>>()
+            .join(",");
+        for footer in [
+            format!("[{too_many_rows}]"),
+            format!("[[{too_many_tokens}]]"),
+            "[[\"summary\"]]".to_string(),
+        ] {
+            let input = format!("[ui.sidebar.agents]\nfooter = {footer}\n");
+            assert!(
+                toml::from_str::<crate::config::Config>(&input).is_err(),
+                "accepted footer {footer}"
+            );
+        }
     }
 
     #[test]

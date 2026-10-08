@@ -469,6 +469,16 @@ herdr pane report-metadata <pane_id> \
 
 元数据上报方只提供值；样式由本地侧边栏配置控制。有关限制、清除、顺序和过期值的信息，请参阅 [CLI 参考：报告元数据](/docs/cli-reference/#panes)。
 
+使用 `footer` 可以在智能体面板底部固定显示汇总行。行写法（包括样式和 rules）及上限与 `rows` 相同。footer 的每一行都整体取自面板显示顺序中第一个报告了该行任一 token 的智能体；没有任何智能体报告的行不会显示。行内 token 以一个空格分隔，`state_icon` 会被忽略。footer 不随列表滚动；面板较矮时会从顶部开始省略行，确保智能体列表至少保留两行。footer 行不可点击。
+
+```toml
+[ui.sidebar.agents]
+footer = [
+  ["$usage_title"],
+  ["$usage_icon", { token = "$usage_5h", rules = [{ contains = "9", bold = true }] }, "$usage_reset"],
+]
+```
+
 侧边栏行设置仅影响展开的桌面侧边栏。折叠视图和移动视图仍使用紧凑布局。
 
 ## 通知

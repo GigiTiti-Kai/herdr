@@ -13,6 +13,7 @@ impl App {
     pub(crate) fn terminal_title_sidebar_changed(&self, changes: &TerminalTitleChanges) -> bool {
         let config = &self.state.sidebar_agents;
         std::iter::once(&config.rows)
+            .chain(std::iter::once(&config.footer))
             .chain(config.rows_by_agent.values())
             .flatten()
             .flatten()
@@ -230,6 +231,12 @@ mod tests {
             "claude".into(),
             vec![vec![crate::config::AgentSidebarToken::TerminalTitle]],
         );
+        assert!(app.terminal_title_sidebar_changed(&spinner_only));
+
+        app.state.sidebar_agents.rows_by_agent.clear();
+        assert!(!app.terminal_title_sidebar_changed(&spinner_only));
+        app.state.sidebar_agents.footer =
+            vec![vec![crate::config::AgentSidebarToken::TerminalTitle]];
         assert!(app.terminal_title_sidebar_changed(&spinner_only));
     }
 

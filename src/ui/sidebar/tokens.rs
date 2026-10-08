@@ -82,13 +82,6 @@ pub(crate) fn agent_rows(
 /// One entry per configured footer row, resolved against this agent only and
 /// kept in position even when empty. `state_icon` never resolves in a footer:
 /// it is always present, so it would make every agent claim every row.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into the Agent panel by the footer rendering commit"
-    )
-)]
 pub(crate) fn agent_footer_candidates(
     footer: &[Vec<AgentSidebarToken>],
     context: &AgentTokenContext<'_>,
@@ -107,13 +100,6 @@ pub(crate) fn agent_footer_candidates(
 /// Footer rows for the panel. Each row comes whole from the first agent, in
 /// display order, that resolved any of its tokens, so values from different
 /// panes never mix in one row. Rows no agent resolves are dropped.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into the Agent panel by the footer rendering commit"
-    )
-)]
 pub(crate) fn agent_footer_rows<'a>(
     row_count: usize,
     candidates_in_display_order: impl IntoIterator<Item = &'a [Vec<ResolvedToken>]>,

@@ -325,6 +325,41 @@ fn print_token_rule_profiles() {
     }
 }
 
+fn print_agent_footer_profiles() {
+    let tokens = (0..14)
+        .map(|index| format!("'$f{index}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    for footer_rows in [0, 6] {
+        let config: Config = toml::from_str(&format!(
+            "[ui.sidebar.agents]\nfooter = [{}]",
+            std::iter::repeat_n(format!("[{tokens}]"), footer_rows)
+                .collect::<Vec<_>>()
+                .join(",")
+        ))
+        .expect("benchmark footer config");
+        let rows = [1, 15].map(|count| {
+            let mut pipeline = RenderPipeline::with_config(active_panes(count), &config);
+            pipeline.app.state.ensure_test_terminals();
+            for terminal in pipeline.app.state.terminals.values_mut() {
+                terminal.detected_agent = Some(crate::detect::Agent::Pi);
+            }
+            let mut snapshot =
+                super::client_shell::snapshot(&pipeline.app, "bench-boot", 1, None, None);
+            // Worst case: every agent resolves every footer token.
+            for agent in &mut snapshot.agents {
+                agent.tokens = (0..14)
+                    .map(|index| (format!("f{index}"), format!("v{index}")))
+                    .collect();
+            }
+            pipeline.client.set_snapshot(Box::new(snapshot));
+            (count, profile_pipeline(pipeline))
+        });
+        println!("agent footer: populated agents, footer_rows={footer_rows} x 14 tokens");
+        print_stage("client shell composition", &rows, |stats| stats.client);
+    }
+}
+
 fn print_split_worktree_profiles() {
     let mut config = Config::default();
     config.ui.sidebar.spaces.rows = vec![
@@ -597,6 +632,7 @@ async fn render_scale_profile() {
     print_profiles("tabs in active workspace (one pane each)", active_tabs);
     print_snapshot_encoding_profiles("active panes", active_panes);
     print_token_rule_profiles();
+    print_agent_footer_profiles();
     print_split_worktree_profiles();
     print_surface_reuse_profiles();
     print_surface_damage_profiles();

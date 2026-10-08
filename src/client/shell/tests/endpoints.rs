@@ -962,6 +962,47 @@ fn aggregate_agents_use_configured_rows_machine_token_and_status_colors() {
 }
 
 #[test]
+fn aggregate_agent_footer_follows_aggregate_display_order() {
+    use crate::api::schema::AgentStatus;
+
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    config.ui.sidebar.agents.footer = vec![vec![crate::config::AgentSidebarToken::Custom(
+        "acct".into(),
+    )]];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    let profile = remote_profile();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+
+    let mut local = snapshot();
+    let mut local_agent = agent("local agent", AgentStatus::Idle, 1);
+    local_agent.tokens = vec![("acct".into(), "acct-local".into())];
+    local.agents = vec![local_agent];
+    state.set_snapshot(Box::new(local));
+    state.set_pane_surface(surface());
+    let mut remote = snapshot();
+    remote.boot_id = "remote-boot".into();
+    let mut remote_agent = agent("remote agent", AgentStatus::Blocked, 1);
+    remote_agent.tokens = vec![("acct".into(), "acct-remote".into())];
+    remote.agents = vec![remote_agent];
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+
+    let frame = state.compose(100, 28).expect("combined endpoint frame");
+    let toggle = state.hits.sidebar_toggle;
+    assert_eq!(state.hits.agent_body.bottom() + 1, toggle.bottom());
+    let rows = frame_rows(&frame);
+    assert!(
+        rows[toggle.y as usize].contains("acct-remote"),
+        "blocked remote agent is first in priority order: {}",
+        rows[toggle.y as usize]
+    );
+    assert!(!rows.join("\n").contains("acct-local"));
+    assert!(!state.hits.endpoint_agents.is_empty());
+}
+
+#[test]
 fn current_workspace_agent_view_excludes_same_workspace_id_on_other_machine() {
     use crate::api::schema::AgentStatus;
     use crate::config::AgentSidebarToken;

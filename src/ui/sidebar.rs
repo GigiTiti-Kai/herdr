@@ -7,8 +7,10 @@ use ratatui::{
 };
 
 pub(crate) use self::tokens::{
-    agent_rows as sidebar_agent_rows, space_rows as sidebar_space_rows, AgentTokenContext,
-    ResolvedToken, ResolvedTokenKind, SpaceTokenContext,
+    agent_footer_candidates as sidebar_agent_footer_candidates,
+    agent_footer_rows as sidebar_agent_footer_rows, agent_rows as sidebar_agent_rows,
+    space_rows as sidebar_space_rows, AgentTokenContext, ResolvedToken, ResolvedTokenKind,
+    SpaceTokenContext,
 };
 use super::text::{display_width, truncate_end};
 use crate::app::state::Palette;
@@ -109,10 +111,6 @@ pub(crate) enum TokenJoin {
     /// Contextual separators: `" "` after a state icon or before git status, else `" · "`.
     Separator,
     /// One blank between every pair of tokens (Agent panel footer rows).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the Agent panel footer rendering commit")
-    )]
     Space,
 }
 

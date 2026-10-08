@@ -698,6 +698,177 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
     assert_eq!(compact.cells[row_start].bg, compact.cells[row_start + 2].bg);
 }
 
+const FOOTER_LONG: &str = "Y1-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+
+fn footer_agent(
+    pane_id: &str,
+    status: AgentStatus,
+    state_change_seq: u64,
+    tokens: &[(&str, &str)],
+) -> ClientShellAgent {
+    ClientShellAgent {
+        pane_id: pane_id.into(),
+        workspace_id: "ws_1".into(),
+        tab_id: "tab_1".into(),
+        name: Some(format!("agent {pane_id}")),
+        display_agent: None,
+        agent: Some("pi".into()),
+        title: None,
+        terminal_title: None,
+        terminal_title_stripped: None,
+        agent_status: status,
+        state_change_seq,
+        state_labels: Vec::new(),
+        tokens: tokens
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect(),
+        focused: pane_id == "pane_1",
+    }
+}
+
+/// pane_2 (blocked) sorts first under Priority; pane_1 (idle) has the rest.
+fn footer_shell() -> ClientShellState {
+    let mut projected = snapshot();
+    let mut second_pane = projected.panes[0].clone();
+    second_pane.pane_id = "pane_2".into();
+    second_pane.focused = false;
+    projected.panes.push(second_pane);
+    projected.agents = vec![
+        footer_agent(
+            "pane_1",
+            AgentStatus::Idle,
+            10,
+            &[
+                ("acct", "IDLE"),
+                ("reset", "2d2h"),
+                ("x", "X1"),
+                ("y", FOOTER_LONG),
+            ],
+        ),
+        footer_agent(
+            "pane_2",
+            AgentStatus::Blocked,
+            20,
+            &[("title", "quota"), ("acct", "BLOCKED")],
+        ),
+    ];
+    let custom = |name: &str| crate::config::AgentSidebarToken::Custom(name.into());
+    let mut config = Config::default();
+    config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+    config.ui.sidebar.agents.rows = vec![vec![crate::config::AgentSidebarToken::Agent]];
+    config.ui.sidebar.agents.footer = vec![
+        vec![custom("title")],
+        vec![custom("acct"), custom("reset")],
+        vec![custom("x"), custom("y")],
+    ];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    state
+}
+
+fn cell_text(frame: &crate::protocol::FrameData, x: u16, y: u16) -> &str {
+    frame.cells[y as usize * frame.width as usize + x as usize]
+        .symbol
+        .as_str()
+}
+
+fn sidebar_line(frame: &crate::protocol::FrameData, area: Rect, y: u16) -> String {
+    (area.x..area.right())
+        .map(|x| cell_text(frame, x, y))
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn agent_footer_pins_whole_rows_from_the_first_resolving_agent() {
+    let mut state = footer_shell();
+    let frame = state.compose(106, 30).expect("footer frame");
+    let body = state.hits.agent_body;
+    let toggle = state.hits.sidebar_toggle;
+
+    assert_eq!(
+        body.bottom() + 3,
+        toggle.bottom(),
+        "footer owns the last three panel rows"
+    );
+    let lines = (body.bottom()..toggle.bottom())
+        .map(|y| sidebar_line(&frame, body, y))
+        .collect::<Vec<_>>();
+    assert_eq!(lines[0], "quota");
+    assert_eq!(
+        lines[1], "BLOCKED",
+        "pane_2 supplies the whole row; 2d2h must not mix in"
+    );
+    assert!(
+        lines[2].starts_with("X1 Y1-"),
+        "single-space join: {lines:?}"
+    );
+    let text = frame_text(&frame);
+    assert!(
+        !text.contains("IDLE") && !text.contains("2d2h"),
+        "frame: {text}"
+    );
+
+    assert_eq!(cell_text(&frame, toggle.x, toggle.y), "«");
+    assert_eq!(cell_text(&frame, toggle.x - 1, toggle.y), " ");
+    assert!(!state.hits.agents.is_empty());
+    assert!(state
+        .hits
+        .agents
+        .iter()
+        .all(|(rect, _)| rect.bottom() <= body.bottom()));
+
+    let click = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: body.x + 1,
+        row: body.bottom(),
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(click.actions.is_empty(), "footer rows are not clickable");
+
+    state.sidebar_collapsed = true;
+    let compact = state.compose(106, 30).expect("compact frame");
+    assert!(!frame_text(&compact).contains("quota"));
+}
+
+#[test]
+fn agent_footer_drops_top_rows_first_and_keeps_two_list_rows() {
+    let mut state = footer_shell();
+    let expected = ["quota", "BLOCKED", "X1"];
+    let mut partially_capped = false;
+    for height in 8..=30 {
+        let Some(frame) = state.compose(106, height) else {
+            continue;
+        };
+        if state.hits.agents.is_empty() {
+            continue;
+        }
+        let body = state.hits.agent_body;
+        let footer_rows = state.hits.sidebar_toggle.bottom() - body.bottom();
+        assert!(footer_rows <= 3, "height {height}");
+        if footer_rows > 0 {
+            assert!(body.height >= 2, "height {height}: {body:?}");
+        }
+        if body.height + footer_rows >= 5 {
+            assert_eq!(footer_rows, 3, "height {height}");
+        }
+        let lines = (body.bottom()..body.bottom() + footer_rows)
+            .map(|y| sidebar_line(&frame, body, y))
+            .collect::<Vec<_>>();
+        for (line, want) in lines.iter().zip(&expected[3 - usize::from(footer_rows)..]) {
+            assert!(line.starts_with(want), "height {height}: {lines:?}");
+        }
+        partially_capped |= (1..3).contains(&footer_rows);
+    }
+    assert!(
+        partially_capped,
+        "some height must show a partially capped footer"
+    );
+}
+
 #[test]
 fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
     let mut projected = snapshot();

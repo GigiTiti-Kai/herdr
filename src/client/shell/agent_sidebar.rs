@@ -15,6 +15,8 @@ pub(super) struct AgentRow {
     pub(super) status: crate::api::schema::AgentStatus,
     pub(super) focused: bool,
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
+    /// One entry per configured footer row (empty when this agent resolves none).
+    pub(super) footer: Vec<Vec<crate::ui::ResolvedToken>>,
 }
 
 pub(super) fn ordered_agent_pane_ids(
@@ -68,10 +70,15 @@ pub(super) fn render_agent_panel(
     }
 
     let rows = agent_rows(snapshot, config, None);
+    let footer = crate::ui::sidebar_agent_footer_rows(
+        config.agents.footer.len(),
+        rows.iter().map(|row| row.footer.as_slice()),
+    );
     render_agent_list(
         buffer,
         area,
         &rows,
+        &footer,
         snapshot
             .agent_view_label
             .as_ref()
@@ -155,6 +162,7 @@ pub(super) fn render_agent_list<T>(
     buffer: &mut Buffer,
     area: Rect,
     rows: &[T],
+    footer: &[Vec<crate::ui::ResolvedToken>],
     empty_message: Option<&str>,
     config: &ClientShellConfig,
     agent_scroll: &mut usize,
@@ -162,11 +170,31 @@ pub(super) fn render_agent_list<T>(
     row_lines: impl Fn(&T) -> usize,
     mut render_row: impl FnMut(&mut Buffer, Rect, &T, &mut ShellHitMap),
 ) {
-    let body = Rect::new(
+    let list = Rect::new(
         area.x,
         area.y.saturating_add(3),
         area.width,
         area.height.saturating_sub(3),
+    );
+    // The list keeps MIN_AGENT_LIST_ROWS; footer rows beyond that are dropped
+    // from the top so the bottom (account) rows survive.
+    let footer_height = list
+        .height
+        .saturating_sub(MIN_AGENT_LIST_ROWS)
+        .min(u16::try_from(footer.len()).unwrap_or(u16::MAX));
+    let body = Rect {
+        height: list.height - footer_height,
+        ..list
+    };
+    render_agent_footer(
+        buffer,
+        Rect {
+            y: body.bottom(),
+            height: footer_height,
+            ..list
+        },
+        &footer[footer.len() - usize::from(footer_height)..],
+        config,
     );
     hits.agent_body = body;
     if body.is_empty() || rows.is_empty() {
@@ -234,6 +262,37 @@ pub(super) fn render_agent_list<T>(
     }
 }
 
+const MIN_AGENT_LIST_ROWS: u16 = 2;
+
+fn render_agent_footer(
+    buffer: &mut Buffer,
+    area: Rect,
+    footer: &[Vec<crate::ui::ResolvedToken>],
+    config: &ClientShellConfig,
+) {
+    let palette = &config.palette;
+    let base = Style::default().fg(palette.overlay0);
+    for (offset, tokens) in footer.iter().enumerate() {
+        let y = area.y + offset as u16;
+        // Both expanded sidebars draw `«` in the panel's last cell after the
+        // panel renders; the last footer row leaves it and one blank before it.
+        let reserved = if y + 1 == area.bottom() { 3 } else { 1 };
+        let mut spans = vec![ratatui::text::Span::raw(" ")];
+        spans.extend(crate::ui::resolved_token_spans(
+            tokens,
+            ("", base),
+            base,
+            base,
+            base,
+            base,
+            palette,
+            area.width.saturating_sub(reserved) as usize,
+            crate::ui::TokenJoin::Space,
+        ));
+        Paragraph::new(Line::from(spans)).render(Rect::new(area.x, y, area.width, 1), buffer);
+    }
+}
+
 pub(super) fn agent_rows(
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
@@ -292,29 +351,29 @@ pub(super) fn agent_row(
         .agent
         .as_deref()
         .and_then(crate::detect::parse_agent_label);
-    let rows = crate::ui::sidebar_agent_rows(
-        &config.agents,
-        crate::ui::AgentTokenContext {
-            machine,
-            workspace: &workspace.label,
-            tab: tab_label,
-            pane: agent
-                .title
-                .as_deref()
-                .or_else(|| pane.and_then(|pane| pane.label.as_deref())),
-            agent_label,
-            terminal_title: agent.terminal_title.as_deref(),
-            terminal_title_stripped: agent.terminal_title_stripped.as_deref(),
-            canonical_agent,
-            tokens: &tokens,
-        },
-        state_text,
-    );
+    let context = crate::ui::AgentTokenContext {
+        machine,
+        workspace: &workspace.label,
+        tab: tab_label,
+        pane: agent
+            .title
+            .as_deref()
+            .or_else(|| pane.and_then(|pane| pane.label.as_deref())),
+        agent_label,
+        terminal_title: agent.terminal_title.as_deref(),
+        terminal_title_stripped: agent.terminal_title_stripped.as_deref(),
+        canonical_agent,
+        tokens: &tokens,
+    };
+    let footer =
+        crate::ui::sidebar_agent_footer_candidates(&config.agents.footer, &context, state_text);
+    let rows = crate::ui::sidebar_agent_rows(&config.agents, context, state_text);
     Some(AgentRow {
         pane_id: agent.pane_id.clone(),
         status: agent.agent_status,
         focused: agent.focused,
         rows,
+        footer,
     })
 }
 
@@ -433,6 +492,7 @@ mod tests {
             status: crate::api::schema::AgentStatus::Idle,
             focused: true,
             rows,
+            footer: Vec::new(),
         };
         render_agent_row(&mut buffer, rect, &row, &config);
         (buffer, config)

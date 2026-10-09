@@ -908,6 +908,105 @@ fn claude_permission_prompt_matches_at_every_cursor_position() {
     }
 }
 
+// Captured from Claude Code 2.1.295 in focus mode: the foreground turn ended
+// while a background subagent kept running. Focus mode appends the hidden
+// message count to the wait line.
+const CLAUDE_FOCUS_MODE_PROMPT_BOX: &str = concat!(
+    "────────────────────────────────────────────────────────────────\n",
+    "❯\n",
+    "────────────────────────────────────────────────────────────────\n",
+    "   Fable 5.1  repro  ━━━━━━━━━━ 7%\n",
+    "  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents\n",
+    "\n",
+    "  ● main\n",
+    "  ◯ general-purpose  Run sleep 600 then report\n",
+);
+
+#[test]
+fn claude_background_agent_wait_with_focus_mode_suffix_is_working() {
+    let screen = format!(
+        concat!(
+            "● Launched the agent in the background.\n\n",
+            "✻ Waiting for 1 background agent to finish · 4 messages hidden (/focus to show)\n",
+            "\n\n",
+            "{}"
+        ),
+        CLAUDE_FOCUS_MODE_PROMPT_BOX
+    );
+    let result = osc_explain(Agent::Claude, &screen, "", "");
+
+    assert_eq!(result.state, AgentState::Working);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("background_agents_working")
+    );
+    assert!(result.visible_working);
+}
+
+#[test]
+fn claude_background_agent_wait_without_suffix_is_still_working() {
+    let screen = format!(
+        concat!("✻ Waiting for 2 background agents to finish\n\n", "{}"),
+        CLAUDE_FOCUS_MODE_PROMPT_BOX
+    );
+    let result = osc_explain(Agent::Claude, &screen, "", "");
+
+    assert_eq!(result.state, AgentState::Working);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("background_agents_working")
+    );
+}
+
+#[test]
+fn claude_running_agents_line_after_wait_is_working() {
+    // While the agents run, Claude adds "● Running N agents…" under the wait
+    // line, so that is the newest line above the prompt box.
+    let screen = format!(
+        concat!(
+            "✻ Waiting for 1 background agent to finish · 4 messages hidden (/focus to show)\n",
+            "\n",
+            "● Running 1 agent…\n",
+            "\n\n",
+            "{}"
+        ),
+        CLAUDE_FOCUS_MODE_PROMPT_BOX
+    );
+    let result = osc_explain(Agent::Claude, &screen, "", "");
+
+    assert_eq!(result.state, AgentState::Working);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("background_agents_working")
+    );
+}
+
+#[test]
+fn claude_stale_background_wait_line_above_newer_output_is_idle() {
+    // Every finished turn leaves its wait line in the transcript; only the
+    // newest line above the prompt box may speak for the pane.
+    let screen = format!(
+        concat!(
+            "✻ Waiting for 1 background agent to finish · 3 messages hidden (/focus to show)\n",
+            "\n",
+            "  Thought for 33s, ran 1 agent, ran 1 shell command\n\n",
+            "● The agent reported done.\n\n",
+            "✻ Cogitated for 1m 22s · done 12:56 · 1 message hidden (/focus to show)\n",
+            "\n\n",
+            "{}"
+        ),
+        CLAUDE_FOCUS_MODE_PROMPT_BOX
+    );
+    let result = osc_explain(Agent::Claude, &screen, "", "");
+
+    assert_eq!(result.state, AgentState::Idle);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("live_prompt_box")
+    );
+    assert!(!result.visible_working);
+}
+
 #[test]
 fn claude_osc_title_braille_prefix_is_working() {
     // "⠂" is U+2802, in the braille block U+2800-U+28FF

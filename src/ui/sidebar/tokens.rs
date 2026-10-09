@@ -99,23 +99,62 @@ pub(crate) fn agent_footer_candidates(
 
 /// Footer rows for the panel. Each row comes whole from the first agent, in
 /// display order, that resolved any of its tokens, so values from different
-/// panes never mix in one row. Rows no agent resolves are dropped.
-pub(crate) fn agent_footer_rows<'a>(
-    row_count: usize,
+/// panes never mix in one row. A row no agent resolves falls back to the first
+/// workspace, in order, whose `$name` tokens resolve it; rows nobody resolves
+/// are dropped.
+pub(crate) fn agent_footer_rows<'a, 'w>(
+    footer: &[Vec<AgentSidebarToken>],
     candidates_in_display_order: impl IntoIterator<Item = &'a [Vec<ResolvedToken>]>,
+    workspace_tokens_in_order: impl IntoIterator<Item = &'w [(String, String)]>,
 ) -> Vec<Vec<ResolvedToken>> {
-    let mut picked: Vec<Option<&'a Vec<ResolvedToken>>> = vec![None; row_count];
+    let mut picked: Vec<Option<Vec<ResolvedToken>>> = vec![None; footer.len()];
     for candidate in candidates_in_display_order {
         if picked.iter().all(Option::is_some) {
             break;
         }
         for (slot, row) in picked.iter_mut().zip(candidate) {
             if slot.is_none() && !row.is_empty() {
-                *slot = Some(row);
+                *slot = Some(row.clone());
             }
         }
     }
-    picked.into_iter().flatten().cloned().collect()
+    for tokens in workspace_tokens_in_order {
+        if picked.iter().all(Option::is_some) {
+            break;
+        }
+        for (slot, row) in picked.iter_mut().zip(footer) {
+            if slot.is_none() {
+                let resolved = resolve_workspace_footer_row(row, tokens);
+                if !resolved.is_empty() {
+                    *slot = Some(resolved);
+                }
+            }
+        }
+    }
+    picked.into_iter().flatten().collect()
+}
+
+/// A workspace has no agent identity or state, so only `$name` tokens resolve;
+/// built-ins would let every workspace claim every row.
+fn resolve_workspace_footer_row(
+    row: &[AgentSidebarToken],
+    tokens: &[(String, String)],
+) -> Vec<ResolvedToken> {
+    row.iter()
+        .filter_map(|configured| {
+            let (AgentSidebarToken::Custom(name), _) = configured.parts() else {
+                return None;
+            };
+            let value = tokens
+                .iter()
+                .find_map(|(key, value)| (key == name).then_some(value))?;
+            let style = configured.style_for_value(value)?;
+            Some(ResolvedToken::new(
+                ResolvedTokenKind::Custom(value.clone()),
+                style,
+            ))
+        })
+        .collect()
 }
 
 fn resolve_agent_row(
@@ -315,7 +354,51 @@ mod tests {
             .iter()
             .map(|entry| agent_footer_candidates(footer, &context(entry), "idle"))
             .collect::<Vec<_>>();
-        agent_footer_rows(footer.len(), candidates.iter().map(Vec::as_slice))
+        agent_footer_rows(footer, candidates.iter().map(Vec::as_slice), [])
+    }
+
+    #[test]
+    fn footer_rows_fall_back_to_workspace_metadata_tokens_only() {
+        let footer = parse_footer(
+            r#"[["$a"], ["$b", "workspace", "state_text"], ["$c"], ["workspace"], [{ token = "$d", rules = [{ equals = "x", hide = true }] }]]"#,
+        );
+        let pairs = |pairs: &[(&str, &str)]| {
+            pairs
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect::<Vec<_>>()
+        };
+        let first = pairs(&[("a", "WA"), ("b", "WB"), ("d", "x")]);
+        let second = pairs(&[("c", "WC"), ("b", "late"), ("d", "WD")]);
+        let workspaces = [first.as_slice(), second.as_slice()];
+
+        assert_eq!(
+            agent_footer_rows(&footer, [], workspaces),
+            vec![
+                vec![custom("WA")],
+                vec![custom("WB")],
+                vec![custom("WC")],
+                vec![custom("WD")],
+            ],
+            "first workspace per row; built-ins never resolve from a workspace"
+        );
+
+        let metadata_only = parse_footer(r#"[["$a"], ["$c"]]"#);
+        let agent = with_tokens(&[("a", "A1")]);
+        let candidates = [agent_footer_candidates(
+            &metadata_only,
+            &context(&agent),
+            "idle",
+        )];
+        assert_eq!(
+            agent_footer_rows(
+                &metadata_only,
+                candidates.iter().map(Vec::as_slice),
+                workspaces,
+            ),
+            vec![vec![custom("A1")], vec![custom("WC")]],
+            "an agent beats every workspace"
+        );
     }
 
     #[test]

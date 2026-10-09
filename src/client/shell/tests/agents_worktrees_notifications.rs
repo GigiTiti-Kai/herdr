@@ -835,6 +835,37 @@ fn agent_footer_pins_whole_rows_from_the_first_resolving_agent() {
 }
 
 #[test]
+fn agent_footer_rows_no_agent_reports_come_from_workspace_tokens() {
+    let mut projected = snapshot();
+    projected.agents = vec![footer_agent(
+        "pane_1",
+        AgentStatus::Idle,
+        10,
+        &[("acct", "PANE")],
+    )];
+    projected.workspaces[0].tokens = vec![
+        ("acct".into(), "WS-ACCT".into()),
+        ("idle_family".into(), "WS-ONLY".into()),
+    ];
+    let custom = |name: &str| crate::config::AgentSidebarToken::Custom(name.into());
+    let mut config = Config::default();
+    config.ui.sidebar.agents.rows = vec![vec![crate::config::AgentSidebarToken::Agent]];
+    config.ui.sidebar.agents.footer = vec![vec![custom("acct")], vec![custom("idle_family")]];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 30).expect("footer frame");
+    let body = state.hits.agent_body;
+    let lines = (body.bottom()..state.hits.sidebar_toggle.bottom())
+        .map(|y| sidebar_line(&frame, body, y))
+        .collect::<Vec<_>>();
+    assert_eq!(lines[0], "PANE", "an agent's value wins over the workspace");
+    assert!(lines[1].starts_with("WS-ONLY "), "{lines:?}");
+    assert_eq!(lines.len(), 2);
+}
+
+#[test]
 fn agent_footer_drops_top_rows_first_and_keeps_two_list_rows() {
     let mut state = footer_shell();
     let expected = ["quota", "BLOCKED", "X1"];

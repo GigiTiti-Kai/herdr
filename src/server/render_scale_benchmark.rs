@@ -375,26 +375,53 @@ fn print_agent_footer_profiles() {
         .join(",");
     let config: Config = toml::from_str(&format!("[ui.sidebar.agents]\nfooter = [{footer}]"))
         .expect("benchmark account footer config");
-    let rows = [1, 15].map(|count| {
-        let mut pipeline = RenderPipeline::with_config(active_panes(count), &config);
-        pipeline.app.state.ensure_test_terminals();
-        for terminal in pipeline.app.state.terminals.values_mut() {
-            terminal.detected_agent = Some(crate::detect::Agent::Pi);
-        }
-        let mut snapshot =
-            super::client_shell::snapshot(&pipeline.app, "bench-boot", 1, None, None);
-        for (index, agent) in snapshot.agents.iter_mut().enumerate() {
-            let family = index % 3;
-            agent.tokens = (0..4)
-                .flat_map(|row| (0..4).map(move |token| (row, token)))
-                .map(|(row, token)| (format!("a{family}_{row}_{token}"), "v".to_string()))
-                .collect();
-        }
-        pipeline.client.set_snapshot(Box::new(snapshot));
-        (count, profile_pipeline(pipeline))
-    });
-    println!("agent footer: populated agents, footer_rows=48 (12 families x 4), 3 families held");
-    print_stage("client shell composition", &rows, |stats| stats.client);
+    let profile = |build: fn(usize) -> Vec<Workspace>, config: &Config| {
+        [1, 15].map(|count| {
+            let mut pipeline = RenderPipeline::with_config(build(count), config);
+            pipeline.app.state.ensure_test_terminals();
+            for terminal in pipeline.app.state.terminals.values_mut() {
+                terminal.detected_agent = Some(crate::detect::Agent::Pi);
+            }
+            let mut snapshot =
+                super::client_shell::snapshot(&pipeline.app, "bench-boot", 1, None, None);
+            for (index, agent) in snapshot.agents.iter_mut().enumerate() {
+                let family = index % 3;
+                agent.tokens = (0..4)
+                    .flat_map(|row| (0..4).map(move |token| (row, token)))
+                    .map(|(row, token)| (format!("a{family}_{row}_{token}"), "v".to_string()))
+                    .collect();
+            }
+            // Families 3..7 live only on workspaces (always-on summaries).
+            for workspace in &mut snapshot.workspaces {
+                workspace.tokens = (3..7)
+                    .flat_map(|family| (0..4).map(move |row| (family, row)))
+                    .map(|(family, row)| (format!("a{family}_{row}_0"), "v".to_string()))
+                    .collect();
+            }
+            pipeline.client.set_snapshot(Box::new(snapshot));
+            (count, profile_pipeline(pipeline))
+        })
+    };
+    // Families 7..11 are reported by nobody, so every composition scans every
+    // workspace for them: the second profile scales that scan.
+    println!("agent footer: populated agents, footer_rows=48 (12 families x 4), 3 families on agents, 4 on workspaces");
+    print_stage(
+        "client shell composition",
+        &profile(active_panes, &config),
+        |stats| stats.client,
+    );
+    println!("agent footer: populated workspaces (1 agent each), footer_rows=0");
+    print_stage(
+        "client shell composition",
+        &profile(workspaces, &Config::default()),
+        |stats| stats.client,
+    );
+    println!("agent footer: populated workspaces (1 agent each), footer_rows=48, 4 families on every workspace");
+    print_stage(
+        "client shell composition",
+        &profile(workspaces, &config),
+        |stats| stats.client,
+    );
 }
 
 fn print_split_worktree_profiles() {

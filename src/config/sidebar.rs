@@ -444,7 +444,8 @@ pub struct AgentsSidebarConfig {
     pub row_gap: u16,
     /// Rows pinned to the bottom of the expanded Agent panel. Same syntax as
     /// `rows`, up to 64 rows; each row is resolved whole from the first agent
-    /// in panel order that reports any of its tokens.
+    /// in panel order that reports any of its tokens, else from the first
+    /// workspace whose `$name` tokens resolve it.
     #[serde(deserialize_with = "deserialize_agent_footer_rows")]
     pub footer: AgentSidebarRows,
 }

@@ -50,6 +50,8 @@ The screen snapshot comes from the recent bottom of the pane buffer, not the scr
 
 Integrations marked `session` in the table above are intentionally not lifecycle authorities. They provide native session identity for restore, but their hooks do not cover the whole lifecycle. They can miss permission approval results, escape interrupts, or other transitions. For those agents, Herdr still uses screen manifest detection.
 
+Claude Code stays `working` while its footer shows one or more background shells, including long-running services. When the count disappears, its prompt can return the pane to `idle`; recognized permission dialogs remain `blocked`.
+
 ## VMs and sandbox wrappers
 
 On Linux and macOS, a host-visible wrapper can hide the real agent process from Herdr. Set `HERDR_AGENT=<agent>` on the wrapper command to tell Herdr which existing agent screen manifest to use. For example, run `HERDR_AGENT=claude fence -- claude` on Linux or `HERDR_AGENT=claude nono run --profile claude-code -- claude` on macOS. The hint applies only to that foreground process. Herdr cannot see it if you set it only inside a VM or container. Avoid exporting it globally unless every inherited foreground process should be treated as that agent.

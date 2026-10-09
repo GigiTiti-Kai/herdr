@@ -728,7 +728,7 @@ fn osc_explain(
 // --- Claude OSC rules ---
 
 #[test]
-fn claude_idle_prompt_with_background_shell_is_idle() {
+fn claude_idle_prompt_with_background_shell_is_working() {
     // Captured from Claude Code 2.1.251 after its foreground turn ended while
     // a long-lived background shell remained active (issue #3414).
     let screen = concat!(
@@ -740,17 +740,17 @@ fn claude_idle_prompt_with_background_shell_is_idle() {
     );
     let result = osc_explain(Agent::Claude, screen, "", "");
 
-    assert_eq!(result.state, AgentState::Idle);
+    assert_eq!(result.state, AgentState::Working);
     assert_eq!(
         result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-        Some("live_prompt_box")
+        Some("background_shells_working")
     );
-    assert!(result.visible_idle);
-    assert!(!result.visible_working);
+    assert!(!result.visible_idle);
+    assert!(result.visible_working);
 }
 
 #[test]
-fn claude_background_shell_without_foreground_evidence_is_idle_fallback() {
+fn claude_background_shell_without_foreground_evidence_is_working() {
     let result = osc_explain(
         Agent::Claude,
         "  ⏵⏵ auto mode on · 1 shell · ← for agents\n",
@@ -758,13 +758,25 @@ fn claude_background_shell_without_foreground_evidence_is_idle_fallback() {
         "",
     );
 
-    assert_eq!(result.state, AgentState::Idle);
-    assert_eq!(result.matched_rule, None);
+    assert_eq!(result.state, AgentState::Working);
     assert_eq!(
-        result.fallback_reason.as_deref(),
-        Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("background_shells_working")
     );
-    assert!(!result.visible_working);
+    assert!(result.visible_working);
+}
+
+#[test]
+fn claude_background_shell_counter_ignores_zero_history_and_prompt_text() {
+    for screen in [
+        "─────────────────────────\n❯\n─────────────────────────\n  ⏵⏵ auto mode on · 0 shells · ← for agents\n",
+        "✻ Sautéed for 10s · 2 shells still running\n─────────────────────────\n❯\n─────────────────────────\n  ⏵⏵ auto mode on · ← for agents\n",
+        "─────────────────────────\n❯ explain ⏵⏵ auto mode on · 2 shells\n─────────────────────────\n  ⏵⏵ auto mode on · ← for agents\n",
+    ] {
+        let result = osc_explain(Agent::Claude, screen, "", "");
+        assert_eq!(result.state, AgentState::Idle, "{screen}");
+        assert!(!result.visible_working, "{screen}");
+    }
 }
 
 #[test]

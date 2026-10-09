@@ -358,6 +358,43 @@ fn print_agent_footer_profiles() {
         println!("agent footer: populated agents, footer_rows={footer_rows} x 14 tokens");
         print_stage("client shell composition", &rows, |stats| stats.client);
     }
+    // Per-account summary shape: 12 families x 4 rows of 4 tokens, each agent
+    // holding one of three families' tokens.
+    let families = 12;
+    let footer = (0..families)
+        .flat_map(|family| {
+            (0..4).map(move |row| {
+                let tokens = (0..4)
+                    .map(|token| format!("'$a{family}_{row}_{token}'"))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("[{tokens}]")
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    let config: Config = toml::from_str(&format!("[ui.sidebar.agents]\nfooter = [{footer}]"))
+        .expect("benchmark account footer config");
+    let rows = [1, 15].map(|count| {
+        let mut pipeline = RenderPipeline::with_config(active_panes(count), &config);
+        pipeline.app.state.ensure_test_terminals();
+        for terminal in pipeline.app.state.terminals.values_mut() {
+            terminal.detected_agent = Some(crate::detect::Agent::Pi);
+        }
+        let mut snapshot =
+            super::client_shell::snapshot(&pipeline.app, "bench-boot", 1, None, None);
+        for (index, agent) in snapshot.agents.iter_mut().enumerate() {
+            let family = index % 3;
+            agent.tokens = (0..4)
+                .flat_map(|row| (0..4).map(move |token| (row, token)))
+                .map(|(row, token)| (format!("a{family}_{row}_{token}"), "v".to_string()))
+                .collect();
+        }
+        pipeline.client.set_snapshot(Box::new(snapshot));
+        (count, profile_pipeline(pipeline))
+    });
+    println!("agent footer: populated agents, footer_rows=48 (12 families x 4), 3 families held");
+    print_stage("client shell composition", &rows, |stats| stats.client);
 }
 
 fn print_split_worktree_profiles() {

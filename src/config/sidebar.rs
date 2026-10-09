@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use crate::detect::Agent;
 
 const MAX_SIDEBAR_ROWS: usize = 16;
+/// A footer is one shared block, not a per-agent layout: a row per account
+/// window plus spacers needs more than 16 rows, and absent rows cost nothing.
+const MAX_AGENT_FOOTER_ROWS: usize = 64;
 const MAX_SIDEBAR_TOKENS_PER_ROW: usize = 16;
 const DEFAULT_SIDEBAR_ROW_GAP: u16 = 0;
 
@@ -18,14 +21,23 @@ where
     T: Deserialize<'de>,
 {
     let rows = Vec::<Vec<T>>::deserialize(deserializer)?;
-    validate_sidebar_rows(&rows).map_err(serde::de::Error::custom)?;
+    validate_sidebar_rows(&rows, MAX_SIDEBAR_ROWS).map_err(serde::de::Error::custom)?;
     Ok(rows)
 }
 
-fn validate_sidebar_rows<T>(rows: &[Vec<T>]) -> Result<(), String> {
-    if rows.len() > MAX_SIDEBAR_ROWS {
+fn deserialize_agent_footer_rows<'de, D>(deserializer: D) -> Result<AgentSidebarRows, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let rows = AgentSidebarRows::deserialize(deserializer)?;
+    validate_sidebar_rows(&rows, MAX_AGENT_FOOTER_ROWS).map_err(serde::de::Error::custom)?;
+    Ok(rows)
+}
+
+fn validate_sidebar_rows<T>(rows: &[Vec<T>], max_rows: usize) -> Result<(), String> {
+    if rows.len() > max_rows {
         return Err(format!(
-            "sidebar layouts may contain at most {MAX_SIDEBAR_ROWS} rows"
+            "sidebar layouts may contain at most {max_rows} rows"
         ));
     }
     if rows
@@ -417,7 +429,7 @@ where
                 "unknown canonical agent id `{id}` in sidebar rows_by_agent"
             )));
         }
-        validate_sidebar_rows(rows).map_err(serde::de::Error::custom)?;
+        validate_sidebar_rows(rows, MAX_SIDEBAR_ROWS).map_err(serde::de::Error::custom)?;
     }
     Ok(rows_by_agent)
 }
@@ -430,10 +442,10 @@ pub struct AgentsSidebarConfig {
     #[serde(default, deserialize_with = "deserialize_rows_by_agent")]
     pub rows_by_agent: BTreeMap<String, AgentSidebarRows>,
     pub row_gap: u16,
-    /// Rows pinned to the bottom of the expanded Agent panel. Same syntax and
-    /// limits as `rows`; each row is resolved whole from the first agent in
-    /// panel order that reports any of its tokens.
-    #[serde(deserialize_with = "deserialize_sidebar_rows")]
+    /// Rows pinned to the bottom of the expanded Agent panel. Same syntax as
+    /// `rows`, up to 64 rows; each row is resolved whole from the first agent
+    /// in panel order that reports any of its tokens.
+    #[serde(deserialize_with = "deserialize_agent_footer_rows")]
     pub footer: AgentSidebarRows,
 }
 
@@ -670,9 +682,18 @@ footer = [["$usage_title"], [{ token = "$usage_5h", fg = "#f00", rules = [{ cont
 
     #[test]
     fn rejects_oversized_or_malformed_agent_footers() {
-        let too_many_rows = std::iter::repeat_n("[\"$x\"]", MAX_SIDEBAR_ROWS + 1)
-            .collect::<Vec<_>>()
-            .join(",");
+        let footer_rows = |count| {
+            std::iter::repeat_n("[\"$x\"]", count)
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let input = format!(
+            "[ui.sidebar.agents]\nfooter = [{}]\n",
+            footer_rows(MAX_AGENT_FOOTER_ROWS)
+        );
+        let config = toml::from_str::<crate::config::Config>(&input).expect("64-row footer");
+        assert_eq!(config.ui.sidebar.agents.footer.len(), MAX_AGENT_FOOTER_ROWS);
+        let too_many_rows = footer_rows(MAX_AGENT_FOOTER_ROWS + 1);
         let too_many_tokens = std::iter::repeat_n("\"$x\"", MAX_SIDEBAR_TOKENS_PER_ROW + 1)
             .collect::<Vec<_>>()
             .join(",");

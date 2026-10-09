@@ -1064,7 +1064,7 @@
           "key": "ui.sidebar.agents.footer",
           "type": "list of token rows",
           "default": "[]",
-          "description": "Rows pinned to the bottom of the expanded Agent panel. Same token syntax, styles, rules, and limits as ui.sidebar.agents.rows. Each row is taken whole from the first agent in panel order that reports any of its tokens; rows no agent reports are hidden. Tokens are joined by one space and state_icon is ignored. On short panels, rows are dropped from the top so the agent list keeps at least two lines."
+          "description": "Rows pinned to the bottom of the expanded Agent panel. Same token syntax, styles, and rules as ui.sidebar.agents.rows. At most 64 rows and 16 tokens per row. Each row is taken whole from the first agent in panel order that reports any of its tokens; rows no agent reports are hidden. Tokens are joined by one space and state_icon is ignored. On short panels, rows are dropped from the top so the agent list keeps at least two lines."
         },
         {
           "key": "ui.sidebar.agents.row_gap",

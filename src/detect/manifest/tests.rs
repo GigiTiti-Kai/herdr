@@ -982,6 +982,44 @@ fn claude_running_agents_line_after_wait_is_working() {
 }
 
 #[test]
+fn claude_dynamic_workflow_wait_with_focus_mode_suffix_is_working() {
+    // A Workflow tool run (ultracode) parks the main turn on the same kind of
+    // wait line, naming "dynamic workflow" instead of "background agent".
+    let screen = format!(
+        concat!(
+            "● 監査ワークフローを実行中。完了したら HTML を開く。\n\n",
+            "✻ Waiting for 1 dynamic workflow to finish · 17 messages hidden (/focus to show)\n",
+            "\n\n",
+            "{}"
+        ),
+        CLAUDE_FOCUS_MODE_PROMPT_BOX
+    );
+    let result = osc_explain(Agent::Claude, &screen, "", "");
+
+    assert_eq!(result.state, AgentState::Working);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("background_agents_working")
+    );
+    assert!(result.visible_working);
+}
+
+#[test]
+fn claude_dynamic_workflows_wait_without_suffix_is_still_working() {
+    let screen = format!(
+        concat!("✻ Waiting for 2 dynamic workflows to finish\n\n", "{}"),
+        CLAUDE_FOCUS_MODE_PROMPT_BOX
+    );
+    let result = osc_explain(Agent::Claude, &screen, "", "");
+
+    assert_eq!(result.state, AgentState::Working);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("background_agents_working")
+    );
+}
+
+#[test]
 fn claude_stale_background_wait_line_above_newer_output_is_idle() {
     // Every finished turn leaves its wait line in the transcript; only the
     // newest line above the prompt box may speak for the pane.

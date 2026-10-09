@@ -1,5 +1,5 @@
 id = "claude"
-version = "2026.10.09.1"
+version = "2026.10.09.2"
 min_engine_version = 2
 updated_at = "2026-10-09T00:00:00Z"
 aliases = ["claude-code"]
@@ -32,8 +32,9 @@ region = "last_non_empty_above_prompt_box"
 visible_working = true
 # Focus mode appends "· N messages hidden (/focus to show)" to the wait line, and
 # while agents run Claude keeps "● Running N agents…" as the newest line.
+# A Workflow tool run (ultracode) waits the same way on "N dynamic workflow(s)".
 any = [
-  { line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2736}\x{273B}\x{273D}]\s+Waiting for [1-9]\d* background agents? to finish(?:\s*\x{00B7}\s*[1-9]\d* messages? hidden \(/focus to show\))?\s*$'] },
+  { line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2736}\x{273B}\x{273D}]\s+Waiting for [1-9]\d* (?:background agents?|dynamic workflows?) to finish(?:\s*\x{00B7}\s*[1-9]\d* messages? hidden \(/focus to show\))?\s*$'] },
   { line_regex = ['^\s*[\x{25CF}\x{2022}]?\s*Running [1-9]\d* agents?\x{2026}\s*$'] },
 ]
 

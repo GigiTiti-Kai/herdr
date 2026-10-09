@@ -505,7 +505,7 @@ Use `herdr workspace report-metadata` in the same way for custom Space tokens. U
 
 Metadata reporters provide values only; styling stays in the local sidebar configuration. See [CLI reference: report metadata](/docs/cli-reference/#panes) for limits, clearing, sequencing, and expiry.
 
-Pin summary rows to the bottom of the Agent panel with `footer`. It uses the same row syntax as `rows`, including styles and rules, and the same limits. Each footer row is taken whole from the first agent in panel order that reports at least one of its tokens; rows that no agent reports are hidden. Tokens in a footer row are separated by a single space, and `state_icon` is ignored. The footer does not scroll. On a short panel, footer rows are dropped from the top so the agent list keeps at least two lines. Footer rows are not clickable.
+Pin summary rows to the bottom of the Agent panel with `footer`. It uses the same row syntax as `rows`, including styles and rules. A footer may contain at most 64 rows, with at most 16 tokens in each row. Each footer row is taken whole from the first agent in panel order that reports at least one of its tokens; rows that no agent reports are hidden. Tokens in a footer row are separated by a single space, and `state_icon` is ignored. The footer does not scroll. On a short panel, footer rows are dropped from the top so the agent list keeps at least two lines. Footer rows are not clickable.
 
 ```toml
 [ui.sidebar.agents]

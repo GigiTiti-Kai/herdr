@@ -1007,6 +1007,57 @@ fn claude_stale_background_wait_line_above_newer_output_is_idle() {
     assert!(!result.visible_working);
 }
 
+// Captured from the Hermes classic CLI (38 columns) after the foreground turn
+// ended with a `delegate_task(background=true)` child still running.
+const HERMES_PROMPT_FOOTER: &str = concat!(
+    " ☤ gpt-6.1-sol · 2m      ─ delegat...\n",
+    "──────────────────────────────────────\n",
+    "❯ Plan a feature, then build it step b\n",
+);
+
+#[test]
+fn hermes_live_subagent_dock_is_working() {
+    let screen = format!(
+        concat!(
+            "↩ Background task running — I'll resum\n",
+            "e when it finishes. Keep chatting.\n\n",
+            "╭─ ☤ Hermes ─────────────────────────╮\n",
+            "spawned\n",
+            "╰────────────────────────────────────╯\n",
+            " Subagents · 1 live · Ctrl+T expand …\n",
+            " ● terminal … · 62s · last: terminal\n",
+            "{}"
+        ),
+        HERMES_PROMPT_FOOTER
+    );
+    let result = osc_explain(Agent::Hermes, &screen, "", "");
+
+    assert_eq!(result.state, AgentState::Working);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("background_subagents_working")
+    );
+    assert!(result.visible_working);
+}
+
+#[test]
+fn hermes_finished_subagent_without_dock_is_not_working() {
+    let screen = format!(
+        concat!(
+            "  ┊ 📖 read      task-0.log  0.0s\n\n",
+            "╭─ ☤ Hermes ─────────────────────────╮\n",
+            "done\n",
+            "╰────────────────────────────────────╯\n",
+            "{}"
+        ),
+        HERMES_PROMPT_FOOTER
+    );
+    let result = osc_explain(Agent::Hermes, &screen, "", "");
+
+    assert_ne!(result.state, AgentState::Working);
+    assert!(!result.visible_working);
+}
+
 #[test]
 fn claude_osc_title_braille_prefix_is_working() {
     // "⠂" is U+2802, in the braille block U+2800-U+28FF

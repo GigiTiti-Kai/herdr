@@ -71,8 +71,12 @@ pub(super) fn render_agent_panel(
 
     let rows = agent_rows(snapshot, config, None);
     let footer = crate::ui::sidebar_agent_footer_rows(
-        config.agents.footer.len(),
+        &config.agents.footer,
         rows.iter().map(|row| row.footer.as_slice()),
+        snapshot
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.tokens.as_slice()),
     );
     render_agent_list(
         buffer,

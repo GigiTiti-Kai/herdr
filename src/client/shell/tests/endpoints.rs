@@ -1063,6 +1063,43 @@ fn stale_endpoint_never_supplies_agent_footer_rows() {
 }
 
 #[test]
+fn agent_footer_falls_back_to_live_workspace_tokens() {
+    use crate::api::schema::AgentStatus;
+
+    let mut config = Config::default();
+    config.ui.sidebar.agents.footer = vec![vec![crate::config::AgentSidebarToken::Custom(
+        "acct".into(),
+    )]];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    let profile = remote_profile();
+    let endpoint_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+
+    let mut local = snapshot();
+    local.agents = vec![agent("local agent", AgentStatus::Idle, 1)];
+    local.workspaces[0].tokens = vec![("acct".into(), "acct-stale-ws".into())];
+    state.set_snapshot(Box::new(local));
+    state.set_pane_surface(surface());
+    let mut remote = snapshot();
+    remote.boot_id = "remote-boot".into();
+    remote.agents = vec![agent("remote agent", AgentStatus::Idle, 1)];
+    remote.workspaces[0].tokens = vec![("acct".into(), "acct-live-ws".into())];
+    state.set_endpoint_snapshot(&endpoint_id, Box::new(remote));
+    state.mark_endpoint_disconnected(&ClientEndpointId::Local);
+
+    let frame = state.compose(100, 28).expect("combined endpoint frame");
+    let toggle = state.hits.sidebar_toggle;
+    let rows = frame_rows(&frame);
+    assert!(
+        rows[toggle.y as usize].contains("acct-live-ws"),
+        "no agent reports the token, so the live workspace supplies it: {}",
+        rows[toggle.y as usize]
+    );
+    assert!(!rows.join("\n").contains("acct-stale-ws"));
+}
+
+#[test]
 fn current_workspace_agent_view_excludes_same_workspace_id_on_other_machine() {
     use crate::api::schema::AgentStatus;
     use crate::config::AgentSidebarToken;

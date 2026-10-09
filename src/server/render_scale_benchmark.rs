@@ -390,10 +390,17 @@ fn print_agent_footer_profiles() {
                 .map(|(row, token)| (format!("a{family}_{row}_{token}"), "v".to_string()))
                 .collect();
         }
+        // Families 3..7 live only on workspaces (always-on summaries).
+        for workspace in &mut snapshot.workspaces {
+            workspace.tokens = (3..7)
+                .flat_map(|family| (0..4).map(move |row| (family, row)))
+                .map(|(family, row)| (format!("a{family}_{row}_0"), "v".to_string()))
+                .collect();
+        }
         pipeline.client.set_snapshot(Box::new(snapshot));
         (count, profile_pipeline(pipeline))
     });
-    println!("agent footer: populated agents, footer_rows=48 (12 families x 4), 3 families held");
+    println!("agent footer: populated agents, footer_rows=48 (12 families x 4), 3 families on agents, 4 on workspaces");
     print_stage("client shell composition", &rows, |stats| stats.client);
 }
 

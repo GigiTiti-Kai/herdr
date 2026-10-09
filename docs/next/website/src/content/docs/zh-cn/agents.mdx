@@ -50,6 +50,8 @@ Herdr 首先检测每个窗格的前台进程。之后,每个窗格有且只有�
 
 上表中标为“会话”的集成有意不作为生命周期权威。它们为恢复提供原生会话身份,但它们的钩子并不覆盖整个生命周期,可能漏掉权限审批结果、Esc 中断或其他状态转换。对这些智能体,Herdr 仍然使用屏幕清单检测。
 
+只要 Claude Code 的页脚显示一个或多个后台 shell,窗格就保持 `working`,包括长期运行的服务。计数消失后,输入提示符可使窗格回到 `idle`;已识别的权限对话框仍优先显示为 `blocked`。
+
 ## 虚拟机与沙箱包装器
 
 在 Linux 和 macOS 上,宿主可见的包装器可能会向 Herdr 隐藏真实的智能体进程。在包装器命令上设置 `HERDR_AGENT=<agent>`,告诉 Herdr 应使用哪个已有智能体的屏幕清单。例如,在 Linux 上运行 `HERDR_AGENT=claude fence -- claude`,或在 macOS 上运行 `HERDR_AGENT=claude nono run --profile claude-code -- claude`。这个提示的作用范围只限于该前台进程;仅在 VM 或容器内部设置时 Herdr 无法看到它,而且除非所有继承的前台进程都应被视为该智能体,否则不要全局 export。

@@ -1041,6 +1041,27 @@ fn hermes_live_subagent_dock_is_working() {
 }
 
 #[test]
+fn hermes_collapsed_subagent_dock_is_working() {
+    // Ctrl+R collapses the dock to one line that starts at column 0.
+    let screen = concat!(
+        "spawned\n",
+        "╰─────────────────────────────────────────────────────────────────────────────╯\n",
+        "Subagents · 1 live · Ctrl+T expand · Ctrl+R restore · last: terminal\n",
+        " ☤ gpt-6.1-sol │ ~29.8K/272K │ [█░░░░░░░░░] ~11% │  ─ delegate_task で slee...\n",
+        "───────────────────────────────────────────────────────────────────────────────\n",
+        "❯ Turn these notes into a to-do list\n",
+        "───────────────────────────────────────────────────────────────────────────────\n",
+    );
+    let result = osc_explain(Agent::Hermes, screen, "", "");
+
+    assert_eq!(result.state, AgentState::Working);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("background_subagents_working")
+    );
+}
+
+#[test]
 fn hermes_finished_subagent_without_dock_is_not_working() {
     let screen = format!(
         concat!(

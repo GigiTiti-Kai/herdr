@@ -91,10 +91,11 @@ state = "working"
 priority = 800
 region = "bottom_non_empty_lines(14)"
 visible_working = true
-# The classic CLI dock above the status bar lists live subagents, e.g.
-# " Subagents · 1 live · Ctrl+T expand · Ctrl+R collapse"; narrow collapsed docks drop the title.
-# It disappears when the last subagent finishes. Blockers (900) still win.
-line_regex = ['^ (?:(?:Subagents|Live work) · )?[1-9]\d* live(?: · .*)?$']
+# The classic CLI dock above the status bar lists live subagents until the last one finishes.
+# Expanded: " Subagents · 1 live · Ctrl+T expand · Ctrl+R collapse" (leading space).
+# Collapsed (Ctrl+R): "Subagents · 1 live · Ctrl+T expand · Ctrl+R restore · …" at column 0;
+# narrow collapsed docks drop the title ("1 live · Ctrl+T · Ctrl+R"). Blockers (900) still win.
+line_regex = ['^ ?(?:(?:Subagents|Live work) · [1-9]\d* live(?: ·|$)|[1-9]\d* live · .*Ctrl\+R)']
 
 [[rules]]
 id = "classic_cancel_working"

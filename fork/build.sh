@@ -16,4 +16,4 @@ cargo build --release --locked
 # install(1) unlinks the destination first, so replacing a running binary is safe.
 install -m755 target/release/herdr "$HOME/.local/bin/herdr"
 "$HOME/.local/bin/herdr" --version
-echo "installed. to pick it up: from a terminal OUTSIDE herdr, run: herdr server stop && herdr"
+echo "installed. preserve running panes with: herdr server live-handoff --import-exe $HOME/.local/bin/herdr"

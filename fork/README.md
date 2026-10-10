@@ -17,6 +17,12 @@ shares the default socket with the fork server.
   GitHub forked and is irrelevant).
 - `dev`: everything of ours, merged on top of master. Build source. Pushed to origin.
 
+The current fork integrates the official `v0.9.3` commit
+`7b116c05bfda646af39d2524c54e70c751f57ee8` directly into the task branch.
+Stable promotion tags can have divergent ancestry, so `fork/sync.sh` cannot
+fast-forward the existing `master` to this tag. Use a reviewed task-branch merge
+for these upgrades; keep the old mirror intact rather than forcing it forward.
+
 ## Commands
 
 - `fork/build.sh` — build with `HERDR_BUILD_CHANNEL=fork`, install to `~/.local/bin/herdr`.
@@ -32,8 +38,8 @@ shares the default socket with the fork server.
     `(deleted)` and the default (`current_exe()`) cannot be spawned. The TUI
     client disconnects once even on success; reattach with `herdr` from a
     terminal outside herdr. In-flight CLI waits and subscriptions are dropped.
-    Verified 2026-09-13 on a throwaway named session, not yet on the default
-    session.
+    Before activation, keep the previous fork binary and session/history files,
+    and record public pane IDs plus shell PIDs/start times for continuity checks.
 
 ## Refreshing herdr-upstream
 
@@ -49,9 +55,13 @@ Do not open PRs. Report reproduced bugs with the issue template (reproduce on
 
 ## Rollback
 
-    install -m755 ~/.local/bin/herdr-upstream ~/.local/bin/herdr
-    herdr server stop && herdr   # outside herdr
+    install -m755 <previous-fork-binary> ~/.local/bin/herdr
+    herdr server live-handoff --import-exe /home/hadas/.local/bin/herdr
 
-If the fork has moved past upstream's session format, the stock binary logs
-"session file is from a newer herdr version, ignoring" and starts with an
-empty layout.
+Keep the pre-upgrade session/history pair as well. v0.9.3 keeps snapshot format
+3 and adds optional resume commands; an older fork can read the layout but drops
+those new fields when it saves again. v0.9.3 also requires a matching layout
+fingerprint before replaying saved screen history, so old history without that
+provenance is ignored while the layout is restored. A stock binary also lacks
+the fork's sidebar, metadata and command features; use the previous fork for
+rollback.

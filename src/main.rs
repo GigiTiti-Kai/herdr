@@ -23,7 +23,7 @@ mod config;
 mod copy_mode;
 mod detect;
 mod events;
-mod ghostty;
+use ghostty_vt as ghostty;
 mod handoff_runtime;
 mod input;
 mod integration;
@@ -34,7 +34,7 @@ mod logging;
 mod metadata_tokens;
 mod noninteractive_process;
 mod pane;
-mod pane_graphics_files;
+use ghostty_vt::pane_graphics_files;
 mod persist;
 mod platform;
 mod plugin_command;
@@ -174,6 +174,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # edit_scrollback = "prefix+e"
 # scroll_to_top = ""      # optional, e.g. "ctrl+home" jumps the focused pane to the top of scrollback
 # scroll_to_bottom = ""   # optional, e.g. "ctrl+end" returns the focused pane to the live bottom
+# clear_pane = ""                  # unbound; e.g. "prefix+ctrl+k"
 # focus_pane_left = "prefix+h"
 # focus_pane_down = "prefix+j"
 # focus_pane_up = "prefix+k"
@@ -397,6 +398,8 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Resume supported AI-agent panes into their native conversation sessions after
 # a Herdr server restart. Requires official integrations that report session refs.
 # resume_agents_on_restore = true
+# Milliseconds between automatic agent restores; 0 starts them without spacing.
+# startup_per_agent_delay_ms = 100
 
 [remote]
 # Whether herdr manages the ssh config used for `herdr --remote`.

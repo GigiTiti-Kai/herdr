@@ -42,7 +42,7 @@ fn space_tab_overview_lists_background_projects_and_focuses_the_clicked_tab() {
     cell_symbol_position(&frame, body, "scheduler");
     cell_symbol_position(&frame, body, "PowerShell");
     if let Some(path) = std::env::var_os("HERDR_TAB_OVERVIEW_PREVIEW") {
-        std::fs::write(path, serde_json::to_vec(&frame).unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec(&frame.frame).unwrap()).unwrap();
     }
     let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),

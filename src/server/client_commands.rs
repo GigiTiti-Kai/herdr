@@ -35,6 +35,7 @@ const CLIENT_SHELL_METHODS: &[&str] = &[
     "pane.split",
     "pane.swap",
     "pane.zoom",
+    "plugin.action.invoke",
     "product_announcement.dismiss",
     "release_notes.dismiss",
     "server.reload_config",
@@ -297,6 +298,10 @@ mod tests {
             actual.remove("pane.link.resolve").as_deref(),
             Some("f5e4a3e01453ae7b188f127ce951c12c20e0bebcc17cc364eeb6d1a01fd5bf81")
         );
+        assert_eq!(
+            actual.remove("plugin.action.invoke").as_deref(),
+            Some("c9d7a501da3edf6e53e723a825554ff318664b3a4d80a572f448d10629462ae0")
+        );
 
         assert_eq!(
             actual, expected,
@@ -371,6 +376,13 @@ mod tests {
                 col: 0,
                 content_revision: None,
                 offset_from_bottom: None,
+            },
+        )));
+        assert!(supports_client_shell_method(&Method::PluginActionInvoke(
+            crate::api::schema::PluginActionInvokeParams {
+                action_id: "example.refresh".into(),
+                plugin_id: None,
+                context: None,
             },
         )));
         assert!(!supports_client_shell_method(&Method::Ping(

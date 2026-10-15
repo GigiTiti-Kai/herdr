@@ -190,16 +190,22 @@ pub(super) fn render_agent_list<T>(
         height: list.height - footer_height,
         ..list
     };
+    let footer_area = Rect {
+        y: body.bottom(),
+        height: footer_height,
+        ..list
+    };
     render_agent_footer(
         buffer,
-        Rect {
-            y: body.bottom(),
-            height: footer_height,
-            ..list
-        },
+        footer_area,
         &footer[footer.len() - usize::from(footer_height)..],
         config,
     );
+    hits.agent_footer = if config.mouse_capture && config.agents.footer_click_action().is_some() {
+        footer_area
+    } else {
+        Rect::default()
+    };
     hits.agent_body = body;
     if body.is_empty() || rows.is_empty() {
         *agent_scroll = 0;

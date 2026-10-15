@@ -448,6 +448,11 @@ pub struct AgentsSidebarConfig {
     /// workspace whose `$name` tokens resolve it.
     #[serde(deserialize_with = "deserialize_agent_footer_rows")]
     pub footer: AgentSidebarRows,
+    /// Plugin action run when the footer is clicked, named like a
+    /// `plugin_action` key command (`plugin.action`). Unset or blank leaves
+    /// the footer unclickable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub footer_plugin_action: Option<String>,
 }
 
 impl AgentsSidebarConfig {
@@ -455,6 +460,14 @@ impl AgentsSidebarConfig {
         agent
             .and_then(|agent| self.rows_by_agent.get(crate::detect::agent_label(agent)))
             .unwrap_or(&self.rows)
+    }
+
+    /// The footer's click action, or `None` when the footer is inert.
+    pub(crate) fn footer_click_action(&self) -> Option<&str> {
+        self.footer_plugin_action
+            .as_deref()
+            .map(str::trim)
+            .filter(|action| !action.is_empty())
     }
 }
 
@@ -473,6 +486,7 @@ impl Default for AgentsSidebarConfig {
             rows_by_agent: BTreeMap::new(),
             row_gap: DEFAULT_SIDEBAR_ROW_GAP,
             footer: Vec::new(),
+            footer_plugin_action: None,
         }
     }
 }
@@ -534,6 +548,46 @@ mod tests {
         );
         assert_eq!(config.spaces.row_gap, 0);
         assert!(config.agents.footer.is_empty());
+        assert_eq!(config.agents.footer_plugin_action, None);
+        assert_eq!(config.agents.footer_click_action(), None);
+    }
+
+    #[test]
+    fn footer_plugin_action_is_trimmed_and_blank_disables_it() {
+        let parse = |value: &str| {
+            toml::from_str::<crate::config::Config>(&format!(
+                "[ui.sidebar.agents]\nfooter_plugin_action = {value}\n"
+            ))
+            .expect("footer_plugin_action config")
+            .ui
+            .sidebar
+            .agents
+        };
+
+        let agents = parse("\" herdr-agent-quota.refresh \"");
+        assert_eq!(
+            agents.footer_click_action(),
+            Some("herdr-agent-quota.refresh")
+        );
+        for blank in ["\"\"", "\"   \""] {
+            assert_eq!(parse(blank).footer_click_action(), None, "{blank}");
+        }
+        assert!(toml::from_str::<crate::config::Config>(
+            "[ui.sidebar.agents]\nfooter_plugin_action = 1\n"
+        )
+        .is_err());
+
+        let encoded = toml::to_string(&SidebarConfig::default()).unwrap();
+        assert!(!encoded.contains("footer_plugin_action"), "{encoded}");
+        let configured = SidebarConfig {
+            agents,
+            ..Default::default()
+        };
+        let encoded = toml::to_string(&configured).unwrap();
+        assert_eq!(
+            toml::from_str::<SidebarConfig>(&encoded).unwrap(),
+            configured
+        );
     }
 
     #[test]

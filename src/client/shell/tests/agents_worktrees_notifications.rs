@@ -729,6 +729,10 @@ fn footer_agent(
 
 /// pane_2 (blocked) sorts first under Priority; pane_1 (idle) has the rest.
 fn footer_shell() -> ClientShellState {
+    footer_shell_with(|_| {})
+}
+
+fn footer_shell_with(configure: impl FnOnce(&mut Config)) -> ClientShellState {
     let mut projected = snapshot();
     let mut second_pane = projected.panes[0].clone();
     second_pane.pane_id = "pane_2".into();
@@ -762,6 +766,7 @@ fn footer_shell() -> ClientShellState {
         vec![custom("acct"), custom("reset")],
         vec![custom("x"), custom("y")],
     ];
+    configure(&mut config);
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());
@@ -827,11 +832,116 @@ fn agent_footer_pins_whole_rows_from_the_first_resolving_agent() {
         row: body.bottom(),
         modifiers: KeyModifiers::empty(),
     })]);
-    assert!(click.actions.is_empty(), "footer rows are not clickable");
+    assert!(
+        click.actions.is_empty(),
+        "footer rows are not clickable without footer_plugin_action"
+    );
 
     state.sidebar_collapsed = true;
     let compact = state.compose(106, 30).expect("compact frame");
     assert!(!frame_text(&compact).contains("quota"));
+}
+
+fn left_click(state: &mut ClientShellState, column: u16, row: u16) -> ClientShellInput {
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::empty(),
+    })])
+}
+
+#[test]
+fn agent_footer_click_invokes_the_configured_plugin_action() {
+    let mut state = footer_shell_with(|config| {
+        config.ui.sidebar.agents.footer_plugin_action = Some("herdr-agent-quota.refresh".into());
+    });
+    state.compose(106, 30).expect("footer frame");
+    let body = state.hits.agent_body;
+    let toggle = state.hits.sidebar_toggle;
+    let footer = state.hits.agent_footer;
+    assert_eq!(
+        (footer.y, footer.bottom()),
+        (body.bottom(), toggle.bottom())
+    );
+    assert_eq!((footer.x, footer.width), (body.x, body.width));
+
+    for row in footer.y..footer.bottom() {
+        let click = left_click(&mut state, body.x + 1, row);
+        let [ClientShellAction::Endpoint { request, .. }] = &click.actions[..] else {
+            panic!(
+                "row {row}: expected one endpoint request, got {:?}",
+                click.actions
+            );
+        };
+        let crate::api::schema::Method::PluginActionInvoke(params) = &request.method else {
+            panic!("row {row}: expected plugin.action.invoke");
+        };
+        assert_eq!(params.action_id, "herdr-agent-quota.refresh");
+        assert_eq!(params.plugin_id, None);
+        assert_eq!(params.context, None);
+    }
+
+    let above = left_click(&mut state, body.x + 1, body.bottom() - 1);
+    assert!(
+        !above.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(request.method, crate::api::schema::Method::PluginActionInvoke(_))
+        )),
+        "the agent list above the footer keeps its own click"
+    );
+
+    let toggle_click = left_click(&mut state, toggle.x, toggle.y);
+    assert!(
+        !toggle_click
+            .actions
+            .iter()
+            .any(|action| matches!(action, ClientShellAction::Endpoint { .. })),
+        "the collapse toggle in the last footer row wins"
+    );
+    assert!(state.sidebar_collapsed);
+}
+
+#[test]
+fn agent_footer_click_needs_mouse_capture_and_a_nonblank_action() {
+    for configure in [
+        (|config: &mut Config| {
+            config.ui.sidebar.agents.footer_plugin_action = Some("  ".into());
+        }) as fn(&mut Config),
+        |config: &mut Config| {
+            config.ui.sidebar.agents.footer_plugin_action = Some("example.refresh".into());
+            config.ui.mouse_capture = false;
+        },
+    ] {
+        let mut state = footer_shell_with(configure);
+        state.compose(106, 30).expect("footer frame");
+        assert_eq!(state.hits.agent_footer, Rect::default());
+        let body = state.hits.agent_body;
+        let click = left_click(&mut state, body.x + 1, body.bottom());
+        assert!(click.actions.is_empty(), "footer stays inert");
+    }
+}
+
+#[test]
+fn agent_footer_click_on_a_server_without_plugin_actions_shows_a_notice() {
+    let mut state = footer_shell_with(|config| {
+        config.ui.sidebar.agents.footer_plugin_action = Some("example.refresh".into());
+    });
+    state.set_endpoint_methods(Some(vec!["pane.focus".into()]));
+    state.compose(106, 30).expect("footer frame");
+    let body = state.hits.agent_body;
+
+    let click = left_click(&mut state, body.x + 1, body.bottom());
+
+    assert!(click.actions.is_empty());
+    let notice = state
+        .visible_endpoint_notice
+        .as_ref()
+        .expect("unsupported action notice");
+    assert_eq!(notice.key.kind, ClientEndpointNoticeKind::Unsupported);
+    assert_eq!(notice.key.code, "plugin.action.invoke");
+    assert!(state.endpoint_error.is_none());
 }
 
 #[test]

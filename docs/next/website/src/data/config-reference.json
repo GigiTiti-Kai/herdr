@@ -1073,6 +1073,12 @@
           "description": "Rows pinned to the bottom of the expanded Agent panel. Same token syntax, styles, and rules as ui.sidebar.agents.rows. At most 64 rows and 16 tokens per row. Each row is taken whole from the first agent in panel order that reports any of its tokens; a row no agent reports is taken from the first workspace, in workspace list order, whose $name metadata tokens resolve it (built-in tokens are left out, offline machines are skipped, agent view filters do not apply); rows nobody reports are hidden. Tokens are joined by one space and state_icon is ignored. On short panels, rows are dropped from the top so the agent list keeps at least two lines."
         },
         {
+          "key": "ui.sidebar.agents.footer_plugin_action",
+          "type": "string",
+          "default": "unset",
+          "description": "Plugin action run when the visible Agent panel footer is clicked, written like the command of a plugin_action key binding (for example \"example.usage.refresh\"). It runs on the selected machine; the sidebar collapse toggle keeps its own click. Unset or blank leaves the footer unclickable."
+        },
+        {
           "key": "ui.sidebar.agents.row_gap",
           "type": "integer",
           "default": "0",

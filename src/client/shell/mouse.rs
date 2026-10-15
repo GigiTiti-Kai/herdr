@@ -2060,6 +2060,20 @@ impl ClientShellState {
                     self.persist_chrome_preferences(outcome);
                     return;
                 }
+                // Checked after the sidebar toggle, which sits in the footer's last row.
+                if super::contains(self.hits.agent_footer, point) {
+                    if let Some(action_id) = self.config.agents.footer_click_action() {
+                        let method = crate::api::schema::Method::PluginActionInvoke(
+                            crate::api::schema::PluginActionInvokeParams {
+                                action_id: action_id.to_owned(),
+                                plugin_id: None,
+                                context: None,
+                            },
+                        );
+                        self.push_endpoint_method(method, outcome);
+                    }
+                    return;
+                }
                 let group_toggle = self.hits.workspaces.iter().find_map(|hit| {
                     let (rect, key) = hit.group_toggle.as_ref()?;
                     super::contains(*rect, point).then(|| (hit.endpoint_id.clone(), key.clone()))

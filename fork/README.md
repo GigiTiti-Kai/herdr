@@ -48,6 +48,16 @@ for these upgrades; keep the old mirror intact rather than forcing it forward.
 `herdr-upstream update` from a terminal outside herdr updates
 `~/.local/bin/herdr-upstream` in place and never touches the fork binary.
 
+## Agent detection manifests
+
+Fork builds (`HERDR_BUILD_CHANNEL=fork`) always use their bundled manifests in
+`src/detect/manifests/`. They neither fetch the hosted catalog nor use a cached
+remote manifest, even a newer one: upstream's hosted claude `2026.10.11.1`
+silently replaced the fork's background shell/agent rules on `0.9.3-fork`.
+Upstream detection fixes arrive with each upstream merge. For an urgent fix,
+use a local override in `~/.config/herdr/agent-detection/<agent>.toml`.
+`bundled_manifests_keep_fork_only_rules` fails if a merge drops a fork rule.
+
 ## Upstream policy
 
 herdrdev/herdr auto-closes pull requests from non-approved contributors.

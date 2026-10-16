@@ -341,6 +341,60 @@ fn older_cached_remote_manifest_does_not_shadow_newer_bundled_manifest() {
 }
 
 #[test]
+fn fork_build_keeps_bundled_manifest_over_newer_cached_remote() {
+    with_manifest_dirs("fork-ignores-remote", || {
+        write_remote_codex_without_reload(&remote_manifest(
+            "9999.01.01.1",
+            "blocked",
+            "remote-ready",
+        ));
+        let bundled = bundled_manifest(Agent::Codex).unwrap();
+
+        let fork = read_remote_manifest_for_channel(Agent::Codex, &bundled, "fork").unwrap();
+        assert!(matches!(fork.source, ManifestSource::Bundled));
+        assert_eq!(fork.cached_remote_version.as_deref(), Some("9999.01.01.1"));
+        assert!(fork
+            .warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("fork builds keep their bundled rules")));
+
+        for channel in ["stable", "preview"] {
+            let loaded = read_remote_manifest_for_channel(Agent::Codex, &bundled, channel).unwrap();
+            assert!(matches!(loaded.source, ManifestSource::Remote { .. }));
+        }
+    });
+}
+
+/// Rules only the fork carries. An upstream merge that drops one, or a manifest
+/// edit that renames it, must fail here instead of silently going inactive.
+#[test]
+fn bundled_manifests_keep_fork_only_rules() {
+    for (agent, rule_id) in [
+        (Agent::Claude, "background_shells_working"),
+        (Agent::Claude, "background_agents_working"),
+        (Agent::Hermes, "background_subagents_working"),
+        (Agent::Codex, "trust_directory"),
+    ] {
+        let manifest = bundled_manifest(agent).unwrap();
+        assert!(
+            manifest.rules.iter().any(|rule| rule.id == rule_id),
+            "{} lost fork rule {rule_id}",
+            agent_label(agent)
+        );
+    }
+    let claude = bundled_manifest(Agent::Claude).unwrap();
+    let waits = claude
+        .rules
+        .iter()
+        .find(|rule| rule.id == "background_agents_working")
+        .unwrap();
+    assert!(
+        format!("{waits:?}").contains("dynamic workflows?"),
+        "claude background wait must keep the fork's dynamic workflow alternative (#23)"
+    );
+}
+
+#[test]
 fn local_override_shadows_cached_remote_manifest() {
     with_manifest_dirs("local-shadows-remote", || {
         write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "remote-ready"));
@@ -1547,6 +1601,15 @@ fn codex_trust_directory_requires_live_chooser() {
     ] {
         assert_codex_title_idle_fallback(&osc_explain(Agent::Codex, &finished, "project", ""));
     }
+
+    // Upstream's newer dialog keeps its own top-anchored rule.
+    let folder_access = "Folder access\n\n\
+        Trust this folder?\n\
+        Codex can read, edit, and run files here.\n\n\
+        › Trust and continue\n";
+    let result = osc_explain(Agent::Codex, folder_access, "project", "");
+    assert_eq!(result.state, AgentState::Blocked);
+    assert!(result.visible_blocker);
 }
 
 #[test]

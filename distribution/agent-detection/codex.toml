@@ -37,28 +37,31 @@ state = "blocked"
 priority = 950
 region = "bottom_non_empty_lines(20)"
 visible_blocker = true
+# Classic dialog. Inline startup (`cxy`) prints shell/worktree lines first, so
+# match from the bottom and require the complete chooser and final Enter line.
 all = [
-  # Upstream (v0.9.5) adds the "Folder access" / "Trust this folder?" dialog.
-  # The fork keeps the classic dialog matchable below inline startup output
-  # (`cxy` prints shell/worktree lines first), so the region is the bottom and
-  # the classic form needs its complete chooser and final Enter instruction.
+  { line_regex = ['^(?:> )?You are in [^\r\n]+$'] },
+  { regex = ['(?s)Do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory\?'] },
+  { contains = ["1. Yes, continue", "2. No, quit"] },
+  { regex = ['Press enter to continue\s*\z'] },
+]
+
+[[rules]]
+id = "trust_folder_access"
+state = "blocked"
+priority = 950
+region = "top_non_empty_lines(20)"
+visible_blocker = true
+# Upstream v0.9.5 "Folder access" dialog, kept exactly as upstream matches it.
+all = [
   { any = [
-    { line_regex = ['^(?:> )?You are in [^\r\n]+$'] },
+    { regex = ['\A> You are in [^\r\n]+(?:\r?\n|$)'] },
     { contains = ["Folder access"] },
   ] },
+  { contains = ["Trust this folder?", "Codex can read, edit, and run files here"] },
   { any = [
-    { all = [
-      { regex = ['(?s)Do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory\?'] },
-      { contains = ["1. Yes, continue", "2. No, quit"] },
-      { regex = ['Press enter to continue\s*\z'] },
-    ] },
-    { all = [
-      { contains = ["Trust this folder?", "Codex can read, edit, and run files here"] },
-      { any = [
-        { contains = ["Trust and continue"] },
-        { contains = ["enter continue"] },
-      ] },
-    ] },
+    { contains = ["Trust and continue"] },
+    { contains = ["enter continue"] },
   ] },
 ]
 

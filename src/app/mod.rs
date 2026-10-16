@@ -586,10 +586,12 @@ impl App {
         // running binary out from under spawned test processes.
         let version_check_enabled =
             background_update_check_enabled(policy.background_updates, config.update.version_check);
-        let manifest_check_enabled = background_update_check_enabled(
-            policy.background_updates,
-            config.update.manifest_check,
-        );
+        // A fork build never uses hosted manifests, so it does not fetch them.
+        let manifest_check_enabled =
+            background_update_check_enabled(
+                policy.background_updates,
+                config.update.manifest_check,
+            ) && !crate::detect::manifest::remote_manifests_ignored(crate::build_info::channel());
         if version_check_enabled {
             let update_tx = event_tx.clone();
             if let Err(err) = crate::thread_spawn::spawn_named("herdr-update-check", move || {

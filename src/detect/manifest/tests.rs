@@ -1609,6 +1609,10 @@ fn codex_trust_directory_requires_live_chooser() {
         › Trust and continue\n";
     let result = osc_explain(Agent::Codex, folder_access, "project", "");
     assert_eq!(result.state, AgentState::Blocked);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some("trust_folder_access")
+    );
     assert!(result.visible_blocker);
 }
 

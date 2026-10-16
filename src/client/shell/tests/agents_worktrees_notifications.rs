@@ -1205,6 +1205,10 @@ fn agent_footer_click_on_a_server_without_plugin_actions_shows_a_notice() {
     assert_eq!(notice.key.kind, ClientEndpointNoticeKind::Unsupported);
     assert_eq!(notice.key.code, "plugin.action.invoke");
     assert!(state.endpoint_error.is_none());
+    assert!(
+        state.agent_footer_flash_until.is_none(),
+        "an action that was not sent does not flash"
+    );
 }
 
 #[test]

@@ -2099,9 +2099,15 @@ impl ClientShellState {
                                 context: None,
                             },
                         );
-                        self.push_endpoint_method(method, outcome);
-                        self.flash_agent_footer(std::time::Instant::now());
-                        outcome.repaint = true;
+                        // Flash only when the request was queued, not when a notice explains why it was not.
+                        if self.push_endpoint_method_with_kind(
+                            method,
+                            PendingEndpointKind::Generic,
+                            outcome,
+                        ) {
+                            self.flash_agent_footer(std::time::Instant::now());
+                            outcome.repaint = true;
+                        }
                     }
                     return;
                 }

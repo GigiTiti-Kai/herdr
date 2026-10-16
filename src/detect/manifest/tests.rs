@@ -89,21 +89,15 @@ fn write_local_codex(content: &str) {
 }
 
 #[test]
-fn codex_no_match_is_unknown_without_changing_other_agents() {
+fn known_agent_no_match_defaults_to_idle_fallback() {
     with_manifest_dirs("no-match", || {
         write_local_codex(&local_manifest("working", "active-marker"));
         let explain = explain(Agent::Codex, "unmatched-marker");
 
-        assert_eq!(explain.state, AgentState::Unknown);
+        assert_eq!(explain.state, AgentState::Idle);
         assert!(!explain.visible_idle);
         assert_eq!(
             explain.fallback_reason.as_deref(),
-            Some("codex_state_ambiguous")
-        );
-        let other = fallback_explain(Some(Agent::Pi), None, false);
-        assert_eq!(other.state, AgentState::Idle);
-        assert_eq!(
-            other.fallback_reason.as_deref(),
             Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
         );
     });
@@ -163,6 +157,130 @@ line_regex = ["^exact line$"]
     });
 }
 
+// A synthetic terminal protocol: live controls may precede a named divider
+// and an optional panel, but a newer prompt/output makes them historical.
+#[test]
+fn end_anchored_footer_gates_allow_only_auxiliary_tail() {
+    with_manifest_dirs("footer-tail", || {
+        write_local_codex(&rules_manifest(
+            r#"
+[[rules]]
+id = "live_controls"
+state = "blocked"
+region = "whole_recent"
+regex = ['(?i)(?:^|\n)controls:\s+(?:confirm-marker|select-marker\s+navigate-marker)\s+cancel-marker[ \t]*\n---[^\n]*(?:\npanel: \d+(?:\nrow: [^\n]+)+(?:\n… \+\d+ pending)?)?(?:\n[ \t]*)*\z']
+"#,
+        ));
+        let footer = "controls: select-marker navigate-marker cancel-marker";
+        for tail in [
+            "--- name",
+            "--- name\npanel: 5\nrow: active\nrow: pending\nrow: pending\nrow: pending\nrow: done\n",
+            "--- name\npanel: 5\nrow: active\nrow: done\n… +3 pending",
+        ] {
+            let live = format!("old output\n{footer}\n{tail}");
+            assert_eq!(explain(Agent::Codex, &live).state, AgentState::Blocked);
+            for later in [
+                "new output",
+                "prompt:",
+                "--- next\nprompt:",
+                "prompt: continue…",
+                "working: processing…",
+                "…ordinary output",
+                "finished…",
+                "… +2 arbitrary words",
+            ] {
+                assert_eq!(
+                    explain(Agent::Codex, &format!("{live}\n{later}")).state,
+                    AgentState::Idle
+                );
+            }
+        }
+        for tail in [
+            "--- name\n… +2 pending",
+            "--- name\nrow: active",
+            "--- name\npanel: 5",
+            "--- name\npanel: 5\nrow: active\n  working: processing…",
+            "--- name\npanel: 5\nrow: active\n  prompt: continue…",
+        ] {
+            assert_eq!(
+                explain(Agent::Codex, &format!("{footer}\n{tail}")).state,
+                AgentState::Idle
+            );
+        }
+        for controls in [
+            "controls: confirm-marker cancel-marker",
+            "controls: select-marker\nnavigate-marker cancel-marker",
+            "controls:\nselect-marker\nnavigate-marker\ncancel-marker",
+        ] {
+            assert_eq!(
+                explain(Agent::Codex, &format!("{controls}\n--- name")).state,
+                AgentState::Blocked
+            );
+        }
+        for controls in [
+            "controls: select-marker cancel-marker",
+            "controls: navigate-marker cancel-marker",
+            "controls: confirm-marker",
+            "controls: select-marker unrelated navigate-marker cancel-marker",
+            "controls: select-marker\nprompt: navigate-marker cancel-marker",
+        ] {
+            assert_eq!(
+                explain(
+                    Agent::Codex,
+                    &format!("confirm-marker navigate-marker\n{controls}\n--- name")
+                )
+                .state,
+                AgentState::Idle
+            );
+        }
+    });
+}
+
+#[test]
+fn paired_alternatives_require_complete_gates_at_bottom_buffer() {
+    with_manifest_dirs("paired-alternatives", || {
+        write_local_codex(&rules_manifest(
+            r#"
+[[rules]]
+id = "paired"
+state = "blocked"
+region = "bottom_non_empty_lines(3)"
+visible_blocker = true
+any = [
+  { all = [
+    { contains = ["alpha heading"] },
+    { regex = ['alpha\s+control\s*\z'] },
+  ] },
+  { all = [
+    { contains = ["beta heading"] },
+    { regex = ['beta\s+control\s*\z'] },
+  ] },
+]
+"#,
+        ));
+        for text in [
+            "alpha heading\nalpha control",
+            "beta heading\nbeta\ncontrol",
+        ] {
+            let result = explain(Agent::Codex, text);
+            assert_eq!(result.state, AgentState::Blocked);
+            assert!(result.visible_blocker);
+        }
+        for text in [
+            "alpha heading\nbeta control",
+            "beta heading\nalpha control",
+            "beta control",
+            "beta heading",
+            "beta heading\nbeta control\nnewer content",
+            "beta heading\nfiller one\nfiller two\nbeta control",
+        ] {
+            let result = explain(Agent::Codex, text);
+            assert!(result.matched_rule.is_none(), "{text}");
+            assert!(!result.visible_blocker, "{text}");
+        }
+    });
+}
+
 #[test]
 fn remote_manifest_loads_between_local_override_and_bundled() {
     with_manifest_dirs("remote-source", || {
@@ -190,10 +308,10 @@ fn fallback_explain_preserves_active_manifest_version() {
 
         let explain = explain(Agent::Codex, "ordinary prompt text");
 
-        assert_eq!(explain.state, AgentState::Unknown);
+        assert_eq!(explain.state, AgentState::Idle);
         assert_eq!(
             explain.fallback_reason.as_deref(),
-            Some("codex_state_ambiguous")
+            Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
         );
         assert_eq!(explain.manifest_version.as_deref(), Some("9999.01.01.1"));
         assert!(matches!(
@@ -273,10 +391,10 @@ fn detection_uses_cached_manifest_until_explicit_reload() {
         write_remote_codex_without_reload(&remote_manifest("9999.01.01.2", "working", "new-ready"));
 
         let unchanged = explain(Agent::Codex, "new-ready");
-        assert_eq!(unchanged.state, AgentState::Unknown);
+        assert_eq!(unchanged.state, AgentState::Idle);
         assert_eq!(
             unchanged.fallback_reason.as_deref(),
-            Some("codex_state_ambiguous")
+            Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
         );
         assert_eq!(
             unchanged.cached_remote_version.as_deref(),
@@ -1363,12 +1481,22 @@ fn codex_osc_title_action_required_is_blocked() {
     assert!(result.visible_blocker);
 }
 
+/// Upstream v0.9.5 restored `osc_title_idle` (#4507): with no live screen
+/// signal, a plain Codex title is idle evidence instead of `unknown`.
+fn assert_codex_title_idle_fallback(result: &DetectionExplain) {
+    assert_eq!(result.state, AgentState::Idle);
+    assert_eq!(
+        result.matched_rule.as_ref().map(|r| r.id.as_str()),
+        Some("osc_title_idle")
+    );
+    assert!(!result.visible_working);
+    assert!(!result.visible_blocker);
+}
+
 #[test]
-fn codex_plain_osc_title_is_not_idle_evidence() {
+fn codex_plain_osc_title_falls_back_to_title_idle() {
     let result = osc_explain(Agent::Codex, "", "llm-proxy", "");
-    assert_eq!(result.state, AgentState::Unknown);
-    assert_eq!(result.matched_rule.as_ref().map(|r| r.id.as_str()), None);
-    assert!(!result.visible_idle);
+    assert_codex_title_idle_fallback(&result);
 }
 
 #[test]
@@ -1397,7 +1525,7 @@ fn codex_trust_directory_requires_live_chooser() {
         directory? Working with untrusted contents comes with higher risk.\n";
     let result = osc_explain(Agent::Codex, transcript, "project", "");
 
-    assert_eq!(result.state, AgentState::Unknown);
+    assert_codex_title_idle_fallback(&result);
     assert_ne!(
         result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
         Some("trust_directory")
@@ -1417,10 +1545,7 @@ fn codex_trust_directory_requires_live_chooser() {
         format!("{screen}\n› Ask Codex to do anything\n"),
         screen.replace("1. Yes, continue", "Explain this dialog"),
     ] {
-        assert_eq!(
-            osc_explain(Agent::Codex, &finished, "project", "").state,
-            AgentState::Unknown
-        );
+        assert_codex_title_idle_fallback(&osc_explain(Agent::Codex, &finished, "project", ""));
     }
 }
 
@@ -1456,7 +1581,7 @@ fn codex_startup_update_requires_complete_live_chooser() {
         format!("{wrapped}\n› Ask Codex to do anything\n"),
     ] {
         let result = osc_explain(Agent::Codex, &screen, "project", "");
-        assert_eq!(result.state, AgentState::Unknown);
+        assert_codex_title_idle_fallback(&result);
         assert_ne!(
             result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
             Some("startup_update")
@@ -1468,12 +1593,10 @@ fn codex_startup_update_requires_complete_live_chooser() {
 #[test]
 fn codex_background_terminal_screen_is_not_foreground_state_evidence() {
     // Background terminal tasks can be long-lived helpers such as dev servers.
-    // Their presence and a plain title do not prove the foreground turn is idle or busy.
+    // Their presence does not prove the foreground turn is busy; only the title decides.
     let screen = "background terminal running · /ps to view · /stop to close\n";
     let result = osc_explain(Agent::Codex, screen, "llm-proxy", "");
-    assert_eq!(result.state, AgentState::Unknown);
-    assert_eq!(result.matched_rule.as_ref().map(|r| r.id.as_str()), None);
-    assert!(!result.visible_idle);
+    assert_codex_title_idle_fallback(&result);
 }
 
 #[test]
@@ -1504,10 +1627,7 @@ fn codex_screen_working_fallback_handles_animated_composer() {
     assert!(result.visible_working);
 
     let idle = screen.replace("• Working (1m 13s • esc to interrupt)", "• Finished.");
-    assert_eq!(
-        osc_explain(Agent::Codex, &idle, "project", "").state,
-        AgentState::Unknown
-    );
+    assert_codex_title_idle_fallback(&osc_explain(Agent::Codex, &idle, "project", ""));
 }
 
 #[test]
@@ -1623,8 +1743,7 @@ fn codex_weak_blocker_ignores_finished_response_above_current_prompt() {
         › Ask Codex to do anything\n";
     let result = osc_explain(Agent::Codex, screen, "project", "");
 
-    assert_eq!(result.state, AgentState::Unknown);
-    assert_eq!(result.matched_rule.as_ref().map(|r| r.id.as_str()), None);
+    assert_codex_title_idle_fallback(&result);
 }
 
 #[test]
@@ -1634,8 +1753,7 @@ fn codex_weak_blocker_ignores_wrapped_current_prompt_text() {
           gpt-5.6-sol default · /work\n";
     let result = osc_explain(Agent::Codex, screen, "project", "");
 
-    assert_eq!(result.state, AgentState::Unknown);
-    assert_eq!(result.matched_rule.as_ref().map(|r| r.id.as_str()), None);
+    assert_codex_title_idle_fallback(&result);
 }
 
 #[test]
@@ -1644,7 +1762,7 @@ fn codex_sparkle_prompt_preserves_live_states() {
     {
         let screen = format!("Do you want to proceed? [y/n]\n{marker}unsent draft\n");
         let result = osc_explain(Agent::Codex, &screen, "project | Ready", "");
-        assert_eq!(result.state, AgentState::Unknown, "{marker}");
+        assert_codex_title_idle_fallback(&result);
 
         let working = format!(
             "Do you want to proceed? [y/n]\n• Working (4s • esc to interrupt)\n{marker}draft\n"
@@ -1727,10 +1845,7 @@ fn codex_screen_working_fallback_ignores_stale_and_prompt_text() {
 
     for screen in screens {
         let result = osc_explain(Agent::Codex, screen, "project", "");
-        assert_eq!(result.state, AgentState::Unknown);
-        assert_eq!(result.matched_rule.as_ref().map(|r| r.id.as_str()), None);
-        assert!(!result.visible_idle);
-        assert!(!result.visible_working);
+        assert_codex_title_idle_fallback(&result);
     }
 }
 
@@ -1741,10 +1856,7 @@ fn codex_screen_working_fallback_ignores_interrupted_short_terminal() {
         ›\n";
     let result = osc_explain(Agent::Codex, screen, "project", "");
 
-    assert_eq!(result.state, AgentState::Unknown);
-    assert_eq!(result.matched_rule.as_ref().map(|r| r.id.as_str()), None);
-    assert!(!result.visible_idle);
-    assert!(!result.visible_working);
+    assert_codex_title_idle_fallback(&result);
 }
 
 #[test]

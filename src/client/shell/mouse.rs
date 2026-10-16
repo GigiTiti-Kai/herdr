@@ -2100,6 +2100,8 @@ impl ClientShellState {
                             },
                         );
                         self.push_endpoint_method(method, outcome);
+                        self.flash_agent_footer(std::time::Instant::now());
+                        outcome.repaint = true;
                     }
                     return;
                 }

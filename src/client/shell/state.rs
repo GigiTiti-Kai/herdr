@@ -4,6 +4,7 @@ pub(super) const MIN_TAB_WIDTH: u16 = 8;
 pub(super) const NEW_TAB_WIDTH: u16 = 3;
 pub(super) const WORKSPACE_HEADER_ROWS: u16 = 2;
 const ENDPOINT_ERROR_TIMEOUT_SECS: u64 = 5;
+const AGENT_FOOTER_FLASH: std::time::Duration = std::time::Duration::from_millis(200);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClientShellKeybindingSource {
@@ -934,6 +935,8 @@ pub(crate) struct ClientShellState {
     pub(super) selection_autoscroll: Option<ClientSelectionAutoscroll>,
     pub(super) selection_autoscroll_deadline: Option<std::time::Instant>,
     pub(super) selection_highlight_clear_deadline: Option<std::time::Instant>,
+    /// The agent footer stays highlighted until this instant after a click.
+    pub(super) agent_footer_flash_until: Option<std::time::Instant>,
     pub(super) word_selection_gesture: Option<ClientWordSelection>,
     pub(super) word_selection_generation: u64,
     pub(super) copy_mode: Option<ClientCopyModeState>,
@@ -1104,6 +1107,7 @@ impl ClientShellState {
             selection_autoscroll: None,
             selection_autoscroll_deadline: None,
             selection_highlight_clear_deadline: None,
+            agent_footer_flash_until: None,
             word_selection_gesture: None,
             word_selection_generation: 0,
             copy_mode: None,
@@ -1909,11 +1913,38 @@ impl ClientShellState {
         false
     }
 
+    /// Start the short highlight that confirms an agent footer click.
+    pub(super) fn flash_agent_footer(&mut self, now: std::time::Instant) {
+        self.agent_footer_flash_until = Some(now + AGENT_FOOTER_FLASH);
+    }
+
+    pub(crate) fn tick_agent_footer_flash(&mut self, now: std::time::Instant) -> bool {
+        if self
+            .agent_footer_flash_until
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.agent_footer_flash_until = None;
+            return true;
+        }
+        false
+    }
+
+    /// Paint the footer reversed while the click highlight lasts.
+    pub(super) fn paint_agent_footer_flash(&self, buffer: &mut Buffer) {
+        if self.agent_footer_flash_until.is_some() && !self.hits.agent_footer.is_empty() {
+            buffer.set_style(
+                self.hits.agent_footer.intersection(buffer.area),
+                Style::default().add_modifier(Modifier::REVERSED),
+            );
+        }
+    }
+
     pub(crate) fn timer_delay(&self, now: std::time::Instant) -> std::time::Duration {
         let default = std::time::Duration::from_millis(100);
         self.selection_autoscroll_deadline
             .into_iter()
             .chain(self.selection_repaint_deadline)
+            .chain(self.agent_footer_flash_until)
             .min()
             .map(|deadline| deadline.saturating_duration_since(now).min(default))
             .unwrap_or(default)

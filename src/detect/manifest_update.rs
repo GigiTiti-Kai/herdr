@@ -166,6 +166,14 @@ struct CatalogAgent {
 }
 
 pub(crate) fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+    // Covers config reloads that turn the check on; nothing is fetched or written.
+    if super::manifest::remote_manifests_ignored(crate::build_info::channel()) {
+        tracing::info!(
+            reason = FORK_MANIFEST_UPDATE_DISABLED,
+            "skipping agent detection manifest check"
+        );
+        return;
+    }
     let result = check_and_update();
     let status = match result {
         Ok(output) => {
@@ -233,8 +241,14 @@ pub(crate) struct ManifestUpdateOutput {
 }
 
 pub(crate) fn check_and_update() -> Result<ManifestUpdateOutput, String> {
+    if super::manifest::remote_manifests_ignored(crate::build_info::channel()) {
+        return Err(FORK_MANIFEST_UPDATE_DISABLED.to_string());
+    }
     check_and_update_from_url(&catalog_url())
 }
+
+const FORK_MANIFEST_UPDATE_DISABLED: &str =
+    "fork builds keep their bundled agent detection manifests; use a local override for urgent fixes (see fork/README.md)";
 
 fn check_and_update_from_url(url: &str) -> Result<ManifestUpdateOutput, String> {
     let catalog = parse_catalog(&fetch_text(url)?)?;

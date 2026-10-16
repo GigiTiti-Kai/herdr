@@ -17,8 +17,9 @@ shares the default socket with the fork server.
   GitHub forked and is irrelevant).
 - `dev`: everything of ours, merged on top of master. Build source. Pushed to origin.
 
-The current fork integrates the official `v0.9.3` commit
-`7b116c05bfda646af39d2524c54e70c751f57ee8` directly into the task branch.
+The current fork integrates the official `v0.9.5` commit
+`2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01` directly into the task branch
+(the previous upgrade did the same with `v0.9.3`, `7b116c05`).
 Stable promotion tags can have divergent ancestry, so `fork/sync.sh` cannot
 fast-forward the existing `master` to this tag. Use a reviewed task-branch merge
 for these upgrades; keep the old mirror intact rather than forcing it forward.
@@ -47,6 +48,16 @@ for these upgrades; keep the old mirror intact rather than forcing it forward.
 `herdr-upstream update` from a terminal outside herdr updates
 `~/.local/bin/herdr-upstream` in place and never touches the fork binary.
 
+## Agent detection manifests
+
+Fork builds (`HERDR_BUILD_CHANNEL=fork`) always use their bundled manifests in
+`src/detect/manifests/`. They neither fetch the hosted catalog nor use a cached
+remote manifest, even a newer one: upstream's hosted claude `2026.10.11.1`
+silently replaced the fork's background shell/agent rules on `0.9.3-fork`.
+Upstream detection fixes arrive with each upstream merge. For an urgent fix,
+use a local override in `~/.config/herdr/agent-detection/<agent>.toml`.
+`bundled_manifests_keep_fork_only_rules` fails if a merge drops a fork rule.
+
 ## Upstream policy
 
 herdrdev/herdr auto-closes pull requests from non-approved contributors.
@@ -62,6 +73,8 @@ Keep the pre-upgrade session/history pair as well. v0.9.3 keeps snapshot format
 3 and adds optional resume commands; an older fork can read the layout but drops
 those new fields when it saves again. v0.9.3 also requires a matching layout
 fingerprint before replaying saved screen history, so old history without that
-provenance is ignored while the layout is restored. A stock binary also lacks
+provenance is ignored while the layout is restored. v0.9.5 keeps snapshot
+format 3 and adds only the optional `host_shutdown_intent` field to the
+live-handoff manifest, which older servers ignore. A stock binary also lacks
 the fork's sidebar, metadata and command features; use the previous fork for
 rollback.

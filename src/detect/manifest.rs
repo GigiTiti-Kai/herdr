@@ -540,14 +540,14 @@ fn fallback_explain(
             )
         })
         .unwrap_or((None, Vec::new(), None, None, None, false));
-    let assume_idle = agent.is_some_and(|agent| agent != Agent::Codex);
+    let known_agent = agent.is_some();
     let remote_update_status = include_update_status
         .then(|| agent.and_then(remote_update_status))
         .flatten();
 
     DetectionExplain {
         agent: agent.map(|agent| agent_label(agent).to_string()),
-        state: if assume_idle {
+        state: if known_agent {
             AgentState::Idle
         } else {
             AgentState::Unknown
@@ -560,11 +560,7 @@ fn fallback_explain(
         visible_working: false,
         skip_state_update: false,
         skipped_update_reason: None,
-        fallback_reason: match agent {
-            Some(Agent::Codex) => Some("codex_state_ambiguous".to_string()),
-            Some(_) => Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK.to_string()),
-            None => None,
-        },
+        fallback_reason: known_agent.then(|| DEFAULT_KNOWN_AGENT_IDLE_FALLBACK.to_string()),
         evaluated_rules,
         warning,
         manifest_version,
@@ -745,7 +741,22 @@ fn read_override_manifest(path: &Path) -> Result<AgentManifest, String> {
     parse_manifest(&content)
 }
 
+/// Fork builds carry their own detection rules in the bundled manifests. A
+/// hosted upstream manifest, even a newer one, would silently drop them, so a
+/// fork build never takes one (the same rule as fork self-update).
+pub(crate) fn remote_manifests_ignored(channel: &str) -> bool {
+    channel == "fork"
+}
+
 fn read_remote_manifest(agent: Agent, bundled: &AgentManifest) -> Option<LoadedManifest> {
+    read_remote_manifest_for_channel(agent, bundled, crate::build_info::channel())
+}
+
+fn read_remote_manifest_for_channel(
+    agent: Agent,
+    bundled: &AgentManifest,
+    channel: &str,
+) -> Option<LoadedManifest> {
     let path = super::manifest_update::remote_manifest_path(agent);
     if !path.exists() {
         return None;
@@ -761,6 +772,18 @@ fn read_remote_manifest(agent: Agent, bundled: &AgentManifest) -> Option<LoadedM
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "unknown".to_string());
+            if remote_manifests_ignored(channel) {
+                return Some(bundled_loaded_manifest(
+                    agent,
+                    bundled.clone(),
+                    Some(format!(
+                        "ignored remote manifest {} because fork builds keep their bundled rules",
+                        path.display()
+                    )),
+                    Some(version),
+                    false,
+                ));
+            }
             if let (Some(remote_version), Some(bundled_version)) =
                 (manifest.version.as_ref(), bundled.version.as_ref())
             {

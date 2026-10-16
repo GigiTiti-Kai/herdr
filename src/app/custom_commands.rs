@@ -375,7 +375,7 @@ impl App {
             return Err(std::io::Error::other("no active workspace"));
         };
         let cwd = self.resolve_new_terminal_cwd(self.focused_pane_cwd_in_workspace(ws_idx));
-        let (rows, cols) = self.state.estimate_pane_size();
+        let (rows, cols) = self.state.new_pane_size(crate::ui::NewPanePlacement::Alone);
         let (env, _) = self.custom_command_env();
         let scrollback_limit_bytes = self.state.pane_scrollback_limit_bytes;
         let host_terminal_theme = self.state.host_terminal_theme;
@@ -414,7 +414,21 @@ impl App {
             return Err(std::io::Error::other("no active workspace"));
         };
         let previous_focus = self.state.current_pane_focus_target();
-        let (rows, cols) = self.state.estimate_pane_size();
+        let target = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.focused_pane_id())
+            .ok_or_else(|| std::io::Error::other("no focused pane"))?;
+        // Same size `pane.split` computes for its default even split.
+        let (rows, cols) = self
+            .state
+            .new_pane_size(crate::ui::NewPanePlacement::Split {
+                ws_idx,
+                target,
+                direction,
+                ratio: 0.5,
+            });
         let (env, _) = self.custom_command_env();
         let cwd = Some(self.resolve_new_terminal_cwd(self.focused_pane_cwd_in_workspace(ws_idx)));
         let scrollback_limit_bytes = self.state.pane_scrollback_limit_bytes;
@@ -467,9 +481,9 @@ impl App {
             return Err(std::io::Error::other("no active workspace"));
         };
         let previous_focus_target = self.state.current_pane_focus_target();
-        let (rows, cols) = self.state.estimate_pane_size();
-        let new_rows = rows.max(4);
-        let new_cols = cols.max(10);
+        let (rows, cols) = self
+            .state
+            .new_pane_size(crate::ui::NewPanePlacement::ZoomedOverlay);
         let (env, _) = self.custom_command_env();
 
         let ws = self
@@ -491,8 +505,8 @@ impl App {
         });
         let new_pane = ws.split_focused_command(
             Direction::Horizontal,
-            new_rows,
-            new_cols,
+            rows,
+            cols,
             cwd,
             command,
             env,
@@ -546,9 +560,9 @@ impl App {
             return Err(std::io::Error::other("no active workspace"));
         };
         let previous_focus_target = self.state.current_pane_focus_target();
-        let (rows, cols) = self.state.estimate_pane_size();
-        let new_rows = rows.max(4);
-        let new_cols = cols.max(10);
+        let (rows, cols) = self
+            .state
+            .new_pane_size(crate::ui::NewPanePlacement::ZoomedOverlay);
 
         let ws = self
             .state
@@ -578,8 +592,8 @@ impl App {
             let result = ws.split_pane_argv_command(
                 previous_focus,
                 Direction::Horizontal,
-                new_rows,
-                new_cols,
+                rows,
+                cols,
                 cwd,
                 argv,
                 extra_env,
@@ -692,6 +706,8 @@ mod tests {
         }
     }
 
+    // The tab/split tests that use these helpers spawn PTYs and run on Unix only.
+    #[cfg(unix)]
     fn test_app_with_workspace() -> crate::app::App {
         let mut app = test_app();
         app.state.workspaces = vec![crate::workspace::Workspace::test_new("commands")];
@@ -701,6 +717,7 @@ mod tests {
         app
     }
 
+    #[cfg(unix)]
     fn invoke_only_command(app: &mut crate::app::App) -> String {
         let command_id = app.client_shell_command_manifest()[0].command_id.clone();
         app.handle_command_invoke(

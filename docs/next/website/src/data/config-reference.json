@@ -1082,7 +1082,7 @@
           "key": "ui.sidebar.agents.footer_plugin_action",
           "type": "string",
           "default": "unset",
-          "description": "Plugin action run when the visible Agent panel footer is clicked, written like the command of a plugin_action key binding (for example \"example.usage.refresh\"). It runs on the selected machine; the sidebar collapse toggle keeps its own click. Unset or blank leaves the footer unclickable."
+          "description": "Plugin action run when the visible Agent panel footer is clicked, written like the command of a plugin_action key binding (for example \"example.usage.refresh\"). It runs on the selected machine; the sidebar collapse toggle keeps its own click. The footer briefly shows in reverse video on a click. Unset or blank leaves the footer unclickable."
         },
         {
           "key": "ui.sidebar.agents.row_gap",

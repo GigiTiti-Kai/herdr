@@ -1140,7 +1140,50 @@ fn agent_footer_click_needs_mouse_capture_and_a_nonblank_action() {
         let body = state.hits.agent_body;
         let click = left_click(&mut state, body.x + 1, body.bottom());
         assert!(click.actions.is_empty(), "footer stays inert");
+        assert!(
+            state.agent_footer_flash_until.is_none(),
+            "no flash without an action"
+        );
     }
+}
+
+#[test]
+fn agent_footer_click_flashes_the_footer_briefly() {
+    let mut state = footer_shell_with(|config| {
+        config.ui.sidebar.agents.footer_plugin_action = Some("herdr-agent-quota.refresh".into());
+    });
+    state.compose(106, 30).expect("footer frame");
+    let footer = state.hits.agent_footer;
+    let reversed = |frame: &crate::protocol::FrameData, y: u16| {
+        (footer.x..footer.right()).all(|x| {
+            frame.cells[y as usize * frame.width as usize + x as usize].modifier
+                & Modifier::REVERSED.bits()
+                != 0
+        })
+    };
+    let before = state.compose(106, 30).expect("footer frame");
+    assert!(!reversed(&before, footer.y));
+
+    let click = left_click(&mut state, footer.x + 1, footer.y);
+    assert!(click.repaint);
+    let flashing = state.compose(106, 30).expect("flash frame");
+    for row in footer.y..footer.bottom() {
+        assert!(reversed(&flashing, row), "footer row {row} is highlighted");
+    }
+    assert!(!reversed(&flashing, footer.y - 1), "the agent list is not");
+
+    let until = state.agent_footer_flash_until.expect("flash deadline");
+    assert!(
+        state.timer_delay(until - std::time::Duration::from_millis(50))
+            <= std::time::Duration::from_millis(50)
+    );
+    assert!(!state.tick_agent_footer_flash(until - std::time::Duration::from_millis(1)));
+    assert!(
+        state.tick_agent_footer_flash(until),
+        "expiry asks for a repaint"
+    );
+    let after = state.compose(106, 30).expect("frame after flash");
+    assert!(!reversed(&after, footer.y));
 }
 
 #[test]
@@ -1162,6 +1205,10 @@ fn agent_footer_click_on_a_server_without_plugin_actions_shows_a_notice() {
     assert_eq!(notice.key.kind, ClientEndpointNoticeKind::Unsupported);
     assert_eq!(notice.key.code, "plugin.action.invoke");
     assert!(state.endpoint_error.is_none());
+    assert!(
+        state.agent_footer_flash_until.is_none(),
+        "an action that was not sent does not flash"
+    );
 }
 
 #[test]

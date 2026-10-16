@@ -1,5 +1,5 @@
 id = "codex"
-version = "2026.10.17.1"
+version = "2026.10.17.2"
 min_engine_version = 3
 updated_at = "2026-10-17T00:00:00Z"
 
@@ -62,6 +62,27 @@ all = [
   { any = [
     { contains = ["Trust and continue"] },
     { contains = ["enter continue"] },
+  ] },
+]
+
+[[rules]]
+id = "hooks_review"
+state = "blocked"
+priority = 950
+region = "bottom_non_empty_lines(20)"
+visible_blocker = true
+# Codex asks before running new or changed hooks: a chooser, then (after
+# "Review hooks") a hook list and a per-hook detail. Each waits for a key.
+any = [
+  { all = [
+    { contains = ["Hooks need review", "Trust all and continue", "Continue without trusting"] },
+    { regex = ['enter confirm · esc skip\s*\z'] },
+  ] },
+  { regex = ['t trust all · enter review · esc close\s*\z'] },
+  { all = [
+    { line_regex = ['^\s*Timeout\s+\S'] },
+    { line_regex = ['^\s*Trust\s+\S'] },
+    { regex = ['space/enter toggle · esc back\s*\z'] },
   ] },
 ]
 

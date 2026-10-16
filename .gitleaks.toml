@@ -7,5 +7,6 @@ paths = ['''^vendor/libghostty-vt/''']
 
 [[allowlists]]
 description = "Upstream Windows notification test: a fixed u128 activation token literal, not a credential"
-paths = ['''^src/platform/windows/notifications\.rs$''']
+# Match the line only; a paths entry here would exempt the whole file (gitleaks ORs them).
+regexTarget = "line"
 regexes = ['''0x0123456789abcdef_fedcba9876543210u128''']

@@ -17,6 +17,7 @@ use crate::api::schema::{
     PaneZoomResult, ResponseResult,
 };
 use crate::app::actions::{PaneZoomCommand, PaneZoomNoopReason};
+use crate::app::dock::DOCK_PANE_ID;
 use crate::app::App;
 #[cfg(test)]
 use crate::app::Mode;
@@ -164,6 +165,12 @@ impl App {
     }
 
     pub(super) fn handle_pane_get(&mut self, id: String, target: PaneTarget) -> String {
+        if target.pane_id == DOCK_PANE_ID {
+            return match self.dock_pane_info() {
+                Some(pane) => encode_success(id, ResponseResult::PaneInfo { pane }),
+                None => pane_not_found(id, &target.pane_id),
+            };
+        }
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&target.pane_id) else {
             return pane_not_found(id, &target.pane_id);
         };
@@ -489,6 +496,12 @@ impl App {
     }
 
     pub(super) fn handle_pane_focus(&mut self, id: String, target: PaneTarget) -> String {
+        if target.pane_id == DOCK_PANE_ID {
+            return match self.focus_dock_pane() {
+                Some(pane) => encode_success(id, ResponseResult::PaneInfo { pane }),
+                None => pane_not_found(id, &target.pane_id),
+            };
+        }
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&target.pane_id) else {
             return pane_not_found(id, &target.pane_id);
         };
@@ -665,8 +678,16 @@ impl App {
         id: String,
         params: PaneFocusDirectionParams,
     ) -> String {
-        let Some((ws_idx, source_pane_id)) = self.resolve_optional_pane(params.pane_id.as_deref())
-        else {
+        // The dock sits right of every tab: Right from a pane with no right
+        // neighbor enters it, Left from the dock returns to the tiled focused pane.
+        let from_dock =
+            params.pane_id.as_deref() == Some(DOCK_PANE_ID) && self.state.dock_pane.is_some();
+        let source = if from_dock {
+            None
+        } else {
+            params.pane_id.as_deref()
+        };
+        let Some((ws_idx, source_pane_id)) = self.resolve_optional_pane(source) else {
             return encode_error(id, "pane_not_found", "pane not found");
         };
         let Some(tab_idx) = self.state.workspaces[ws_idx].find_tab_index_for_pane(source_pane_id)
@@ -678,27 +699,47 @@ impl App {
                     .unwrap_or_default(),
             );
         };
-        let Some(source_public_id) = self.public_pane_id(ws_idx, source_pane_id) else {
+        let Some(source_public_id) = (if from_dock {
+            Some(DOCK_PANE_ID.to_string())
+        } else {
+            self.public_pane_id(ws_idx, source_pane_id)
+        }) else {
             return encode_error(id, "pane_not_found", "pane not found");
         };
-        let target =
-            self.directional_pane_target(ws_idx, tab_idx, source_pane_id, params.direction);
-        let reason = target
-            .is_none()
-            .then_some(PaneFocusDirectionReason::NoNeighbor);
+        let target = (!from_dock)
+            .then(|| {
+                self.directional_pane_target(ws_idx, tab_idx, source_pane_id, params.direction)
+            })
+            .flatten();
+        let enter_dock = !from_dock
+            && target.is_none()
+            && params.direction == crate::api::schema::PaneDirection::Right
+            && self.state.dock_pane.is_some();
+        let leave_dock = from_dock && params.direction == crate::api::schema::PaneDirection::Left;
+        let changed = target.is_some() || enter_dock || leave_dock;
+        let reason = (!changed).then_some(PaneFocusDirectionReason::NoNeighbor);
 
         if let Some(target_pane_id) = target {
             self.state.focus_pane_in_workspace(ws_idx, target_pane_id);
             self.state.switch_workspace_tab(ws_idx, tab_idx);
             self.state.mode = crate::app::Mode::Terminal;
         }
-        let focused_pane_id = self
-            .state
-            .workspaces
-            .get(ws_idx)
-            .and_then(|ws| ws.tabs.get(tab_idx))
-            .map(|tab| tab.layout.focused())
-            .and_then(|pane_id| self.public_pane_id(ws_idx, pane_id));
+        if enter_dock {
+            self.focus_dock_pane();
+        }
+        if leave_dock {
+            self.state.dock_focused = false;
+        }
+        let focused_pane_id = if self.state.dock_focused {
+            Some(DOCK_PANE_ID.to_string())
+        } else {
+            self.state
+                .workspaces
+                .get(ws_idx)
+                .and_then(|ws| ws.tabs.get(tab_idx))
+                .map(|tab| tab.layout.focused())
+                .and_then(|pane_id| self.public_pane_id(ws_idx, pane_id))
+        };
         let Some(layout) = self.pane_layout_snapshot(ws_idx, tab_idx) else {
             return encode_error(id, "pane_layout_unavailable", "pane layout unavailable");
         };
@@ -707,7 +748,7 @@ impl App {
             id,
             ResponseResult::PaneFocusDirection {
                 focus: PaneFocusDirectionResult {
-                    changed: target.is_some(),
+                    changed,
                     reason,
                     source_pane_id: source_public_id,
                     focused_pane_id,

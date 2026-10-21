@@ -41,6 +41,44 @@ impl App {
         encode_success(id, ResponseResult::Ok {})
     }
 
+    pub(super) fn open_plugin_dock_pane(
+        &mut self,
+        id: String,
+        params: PluginPaneOpenParams,
+        plugin: &InstalledPluginInfo,
+        pane: PluginManifestPane,
+    ) -> String {
+        let context = self.current_plugin_context("plugin-pane");
+        let cwd = self.plugin_pane_cwd(plugin, params.cwd);
+        let extra_env =
+            match self.plugin_pane_launch_env(plugin, &pane.id, &cwd, params.env, &context) {
+                Ok(env) => env,
+                Err((code, message)) => return encode_error(id, &code, message),
+            };
+        if let Err(err) = self.spawn_dock_argv_command(
+            &pane.command,
+            Some(cwd),
+            extra_env,
+            params.width.or(pane.width),
+        ) {
+            return encode_error(id, "plugin_pane_open_failed", err.to_string());
+        }
+        let Some(dock) = self.state.dock_pane.as_mut() else {
+            return encode_error(id, "plugin_pane_open_failed", "plugin dock disappeared");
+        };
+        dock.plugin = Some(crate::app::state::PluginPaneRecord {
+            plugin_id: plugin.plugin_id.clone(),
+            entrypoint: pane.id.clone(),
+        });
+        if let Some(terminal) = self.state.terminals.get_mut(&dock.terminal_id) {
+            terminal.set_manual_label(pane.title);
+        }
+        if params.focus {
+            self.state.dock_focused = true;
+        }
+        encode_success(id, ResponseResult::Ok {})
+    }
+
     pub(super) fn open_plugin_overlay_pane(
         &mut self,
         id: String,

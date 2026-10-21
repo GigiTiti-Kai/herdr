@@ -489,8 +489,17 @@ impl App {
         .display()
         .to_string();
         let placement = params.placement.unwrap_or(pane.placement);
-        if placement != PluginPanePlacement::Popup
-            && (params.width.is_some() || params.height.is_some())
+        if placement == PluginPanePlacement::Dock && params.height.is_some() {
+            return encode_error(
+                id,
+                "invalid_params",
+                "dock plugin panes span the full height; only width is supported",
+            );
+        }
+        if !matches!(
+            placement,
+            PluginPanePlacement::Popup | PluginPanePlacement::Dock
+        ) && (params.width.is_some() || params.height.is_some())
         {
             return encode_error(
                 id,
@@ -501,8 +510,13 @@ impl App {
         if placement == PluginPanePlacement::Popup && self.state.popup_pane.is_some() {
             return encode_error(id, "ui_busy", "a popup pane is already open");
         }
+        if placement == PluginPanePlacement::Dock && self.state.dock_pane.is_some() {
+            return encode_error(id, "ui_busy", "the dock pane is already open");
+        }
         match placement {
-            PluginPanePlacement::Overlay | PluginPanePlacement::Popup => {
+            PluginPanePlacement::Overlay
+            | PluginPanePlacement::Popup
+            | PluginPanePlacement::Dock => {
                 if params.workspace_id.is_some()
                     || params.target_pane_id.is_some()
                     || params.direction.is_some()
@@ -510,7 +524,7 @@ impl App {
                     return encode_error(
                         id,
                         "invalid_params",
-                        "overlay and popup plugin panes target the active pane",
+                        "overlay, popup, and dock plugin panes target the active pane",
                     );
                 }
             }
@@ -539,6 +553,7 @@ impl App {
                 self.open_plugin_overlay_pane(id, params, &plugin, pane)
             }
             PluginPanePlacement::Popup => self.open_plugin_popup_pane(id, params, &plugin, pane),
+            PluginPanePlacement::Dock => self.open_plugin_dock_pane(id, params, &plugin, pane),
             PluginPanePlacement::Split | PluginPanePlacement::Zoomed => {
                 self.open_plugin_split_pane(id, params, &plugin, pane, placement)
             }
@@ -551,6 +566,26 @@ impl App {
         id: String,
         params: PluginPaneFocusParams,
     ) -> String {
+        if params.pane_id == crate::app::dock::DOCK_PANE_ID {
+            let record = self
+                .state
+                .dock_pane
+                .as_ref()
+                .and_then(|dock| dock.plugin.clone());
+            let (Some(record), Some(pane)) = (record, self.focus_dock_pane()) else {
+                return encode_error(id, "plugin_pane_not_found", "plugin pane not found");
+            };
+            return encode_success(
+                id,
+                ResponseResult::PluginPaneFocused {
+                    plugin_pane: PluginPaneInfo {
+                        plugin_id: record.plugin_id,
+                        entrypoint: record.entrypoint,
+                        pane,
+                    },
+                },
+            );
+        }
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return encode_error(id, "plugin_pane_not_found", "plugin pane not found");
         };
@@ -582,6 +617,17 @@ impl App {
         id: String,
         params: PluginPaneCloseParams,
     ) -> String {
+        if params.pane_id == crate::app::dock::DOCK_PANE_ID {
+            if !self.close_dock_pane() {
+                return encode_error(id, "plugin_pane_not_found", "plugin pane not found");
+            }
+            return encode_success(
+                id,
+                ResponseResult::PluginPaneClosed {
+                    pane_id: params.pane_id,
+                },
+            );
+        }
         let Some((_ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return encode_error(id, "plugin_pane_not_found", "plugin pane not found");
         };
@@ -1632,6 +1678,182 @@ platforms = ["linux", "macos"]
 
         let value: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(value["error"]["code"], "invalid_params");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn plugin_pane_open_dock_rejects_height_and_targets() {
+        let mut app = test_app();
+        let root = unique_temp_path("plugin-pane-dock-params");
+        write_manifest(&root);
+        link_manifest(&mut app, &root);
+        let dock_request = |height, target_pane_id| Request {
+            id: "pane-open-dock".into(),
+            method: Method::PluginPaneOpen(PluginPaneOpenParams {
+                plugin_id: "example.worktree-bootstrap".into(),
+                entrypoint: "board".into(),
+                placement: Some(PluginPanePlacement::Dock),
+                width: Some(crate::popup_size::PopupSize::Percent(30)),
+                height,
+                workspace_id: None,
+                target_pane_id,
+                direction: None,
+                cwd: None,
+                focus: false,
+                env: std::collections::HashMap::new(),
+            }),
+        };
+
+        for request in [
+            dock_request(Some(crate::popup_size::PopupSize::Percent(50)), None),
+            dock_request(None, Some("p_1".into())),
+        ] {
+            let value: serde_json::Value =
+                serde_json::from_str(&app.handle_api_request(request)).unwrap();
+            assert_eq!(value["error"]["code"], "invalid_params");
+        }
+        assert!(app.state.dock_pane.is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn plugin_pane_open_dock_is_layout_neutral_and_names_itself_dock() {
+        // nextest runs each test in its own process, so this cannot leak.
+        std::env::set_var("HERDR_TAB_ID", "server-tab");
+        std::env::set_var("HERDR_WORKSPACE_ID", "server-workspace");
+        let event_hub = crate::api::EventHub::default();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            event_hub.clone(),
+        );
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("plugin-dock")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = crate::app::Mode::Terminal;
+        app.state.view.terminal_area = ratatui::layout::Rect::new(0, 0, 100, 30);
+        let root_pane = app.state.workspaces[0].tabs[0].root_pane;
+        let root_public = app.public_pane_id(0, root_pane).unwrap();
+
+        let root = unique_temp_path("plugin-pane-dock");
+        let env_capture = root.join("dock-env.txt");
+        let manifest = format!(
+            r#"
+id = "example.dock"
+name = "Dock Plugin"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "board"
+title = "Work board"
+command = ["sh", "-c", "printf '%s|%s|%s' ${{HERDR_PANE_ID-unset}} ${{HERDR_TAB_ID-unset}} ${{HERDR_WORKSPACE_ID-unset}} > '{}'; sleep 1"]
+"#,
+            env_capture.display()
+        );
+        write_manifest_content(&root, &manifest);
+        link_manifest(&mut app, &root);
+
+        let dock_request = |id: &str| Request {
+            id: id.into(),
+            method: Method::PluginPaneOpen(PluginPaneOpenParams {
+                plugin_id: "example.dock".into(),
+                entrypoint: "board".into(),
+                placement: Some(PluginPanePlacement::Dock),
+                width: Some(crate::popup_size::PopupSize::Percent(30)),
+                height: None,
+                workspace_id: None,
+                target_pane_id: None,
+                direction: None,
+                cwd: None,
+                focus: false,
+                env: std::collections::HashMap::new(),
+            }),
+        };
+        let open = app.handle_api_request(dock_request("pane-open-dock"));
+        assert_eq!(response_result(&open), ResponseResult::Ok {});
+        let duplicate = app.handle_api_request(dock_request("pane-open-dock-duplicate"));
+        let duplicate: crate::api::schema::ErrorResponse =
+            serde_json::from_str(&duplicate).unwrap();
+        assert_eq!(duplicate.error.code, "ui_busy");
+        assert_eq!(
+            read_capture_when_ready(&env_capture, || {
+                app.drain_internal_events();
+            }),
+            "dock|unset|unset"
+        );
+
+        let dock = app.state.dock_pane.clone().expect("dock opened");
+        assert!(!app.state.plugin_panes.contains_key(&dock.pane_id));
+        assert!(
+            !app.state.dock_focused,
+            "opening the dock must not take focus"
+        );
+        app.state.assert_invariants_for_test();
+        assert_eq!(
+            app.terminal_runtimes
+                .get(&dock.terminal_id)
+                .unwrap()
+                .current_size(),
+            (30, 29),
+            "rows, cols of the 30% column minus its separator"
+        );
+        assert_eq!(app.state.workspaces[0].tabs[0].layout.pane_count(), 1);
+        assert!(app.state.workspaces[0].tabs[0].layout.focused() == root_pane);
+
+        let pane_list = app.handle_api_request(Request {
+            id: "pane-list-dock".into(),
+            method: Method::PaneList(PaneListParams {
+                workspace_id: Some(app.public_workspace_id(0)),
+            }),
+        });
+        let ResponseResult::PaneList { panes } = response_result(&pane_list) else {
+            panic!("expected pane list response: {pane_list}");
+        };
+        assert_eq!(panes.len(), 1);
+        assert_eq!(panes[0].pane_id, root_public);
+        assert!(event_hub.events_after(0).is_empty());
+
+        let focus = app.handle_api_request(Request {
+            id: "dock-focus".into(),
+            method: Method::PluginPaneFocus(PluginPaneFocusParams {
+                pane_id: "dock".into(),
+            }),
+        });
+        let ResponseResult::PluginPaneFocused { plugin_pane } = response_result(&focus) else {
+            panic!("expected plugin pane focus response: {focus}");
+        };
+        assert_eq!(plugin_pane.plugin_id, "example.dock");
+        assert_eq!(plugin_pane.pane.pane_id, "dock");
+        assert_eq!(plugin_pane.pane.label.as_deref(), Some("Work board"));
+        assert!(app.state.dock_focused);
+
+        app.handle_internal_event(crate::events::AppEvent::PaneDied {
+            pane_id: dock.pane_id,
+            exit_reason: crate::platform::ChildExitReason::Exited,
+        });
+        assert!(app.state.dock_pane.is_none());
+        assert!(!app.state.dock_focused);
+        app.state.assert_invariants_for_test();
+        let close = app.handle_api_request(Request {
+            id: "dock-close-missing".into(),
+            method: Method::PluginPaneClose(PluginPaneCloseParams {
+                pane_id: "dock".into(),
+            }),
+        });
+        let close: crate::api::schema::ErrorResponse = serde_json::from_str(&close).unwrap();
+        assert_eq!(close.error.code, "plugin_pane_not_found");
+        assert!(event_hub.events_after(0).is_empty());
+
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
         let _ = std::fs::remove_dir_all(root);
     }
 

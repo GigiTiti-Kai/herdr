@@ -607,6 +607,12 @@ impl HeadlessServer {
         {
             let _ = resize_popup_runtime(&self.app, Rect::new(0, 0, cols, rows), cell_size);
         }
+        crate::ui::resize_dock_pane(
+            &self.app.state,
+            &self.app.terminal_runtimes,
+            Rect::new(0, 0, cols, rows),
+            cell_size,
+        );
         true
     }
 

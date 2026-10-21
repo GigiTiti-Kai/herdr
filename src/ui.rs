@@ -22,6 +22,9 @@ pub(crate) use self::panes::{
     apply_pane_chrome, new_layout_terminal_sizes, new_pane_terminal_size, pane_inner_rect,
     pane_is_scrolled_back, render_selection_highlight, NewPanePlacement,
 };
+pub(crate) use self::panes::{
+    dock_column_rects, dock_rects, dock_tab_area, render_dock, resize_dock_pane,
+};
 pub(crate) use self::release_notes::{
     product_announcement_display_lines, product_announcement_scroll_metrics,
     release_notes_close_button_rect, release_notes_display_lines, release_notes_scroll_metrics,
@@ -100,10 +103,12 @@ fn compute_view_internal(
     if resize_panes {
         resize_background_tab_panes(app, terminal_runtimes, area, cell_size);
         resize_popup_pane(app, terminal_runtimes, area, cell_size);
+        resize_dock_pane(app, terminal_runtimes, area, cell_size);
     }
 
+    // Tab geometry readers (splits, edges, directional focus) see the area left of the dock.
     app.view = crate::app::ViewState {
-        terminal_area: area,
+        terminal_area: dock_tab_area(app, area),
         pane_infos,
     };
 }

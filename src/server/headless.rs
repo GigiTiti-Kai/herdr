@@ -212,6 +212,8 @@ pub struct HeadlessServer {
     tab_geometry_controllers: HashMap<String, u64>,
     /// Stable tab id whose viewers may see and interact with the one terminal popup.
     popup_owner_tab_id: Option<String>,
+    /// Whether tab geometry was last applied with the dock column present.
+    dock_geometry_open: bool,
     /// Process-local identity used to reject shell replacements from an earlier server boot.
     client_shell_boot_id: String,
     /// Outer window title last pushed, paired with the client that received it.
@@ -366,6 +368,7 @@ impl HeadlessServer {
             foreground_client_id: None,
             tab_geometry_controllers: HashMap::new(),
             popup_owner_tab_id: None,
+            dock_geometry_open: false,
             client_shell_boot_id: format!(
                 "{}-{}",
                 std::process::id(),
@@ -998,6 +1001,14 @@ impl HeadlessServer {
     ) {
         for held in held_inputs {
             let result = match held.target {
+                ClientShellInputTarget::Pane(pane_id)
+                    if pane_id == crate::app::dock::DOCK_PANE_ID =>
+                {
+                    let Some((runtime, _)) = self.dock_runtime() else {
+                        continue;
+                    };
+                    apply_client_pane_input_events(runtime, &[held.release])
+                }
                 ClientShellInputTarget::Pane(pane_id) => {
                     let Some((workspace_index, runtime_pane_id)) = self.app.parse_pane_id(&pane_id)
                     else {
@@ -1098,6 +1109,74 @@ impl HeadlessServer {
             .keys()
             .find(|id| id.to_string() == terminal_id)
             .cloned()
+    }
+
+    fn dock_runtime(&self) -> Option<(&crate::terminal::TerminalRuntime, crate::layout::PaneId)> {
+        let dock = self.app.state.dock_pane.as_ref()?;
+        let runtime = self.app.terminal_runtimes.get(&dock.terminal_id)?;
+        Some((runtime, dock.pane_id))
+    }
+
+    /// Routes client keys and mouse to the dock. It is visible on every tab,
+    /// but the owning tab's popup still takes input first.
+    fn handle_client_shell_dock_input(
+        &mut self,
+        client_id: u64,
+        pixel_mouse: bool,
+        mut events: Vec<crate::protocol::ClientPaneInputEvent>,
+    ) -> bool {
+        let pane_id = crate::app::dock::DOCK_PANE_ID.to_string();
+        let Some((runtime, _)) = self.dock_runtime() else {
+            return false;
+        };
+        super::pane_input::downgrade_ineligible_pixel_mouse(
+            &mut events,
+            pixel_mouse,
+            runtime.current_size(),
+            runtime.pixel_size(),
+        );
+        let popup_blocks_input = self.app.state.popup_pane.is_some()
+            && self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
+        if popup_blocks_input {
+            let releases = events
+                .into_iter()
+                .filter(client_pane_input_releases_press)
+                .collect::<Vec<_>>();
+            if releases.is_empty() {
+                return false;
+            }
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                client.track_shell_input(ClientShellInputTarget::Pane(pane_id.clone()), &releases);
+            }
+            let Some((runtime, _)) = self.dock_runtime() else {
+                return false;
+            };
+            let scroll_before = runtime.scroll_metrics();
+            if let Err(err) = apply_client_pane_input_events(runtime, &releases) {
+                warn!(client_id, pane_id, err = %err, "targeted client dock release failed");
+            }
+            return runtime.scroll_metrics() != scroll_before;
+        }
+        let interaction = client_pane_input_has_interaction(&events);
+        if let Some(client) = self.clients.get_mut(&client_id) {
+            client.track_shell_input(ClientShellInputTarget::Pane(pane_id.clone()), &events);
+        }
+        let foreground_changed = interaction && self.promote_client_to_foreground(client_id);
+        let Some((runtime, dock_pane_id)) = self.dock_runtime() else {
+            return foreground_changed;
+        };
+        let scroll_before = runtime.scroll_metrics();
+        let mut keyboard_forwarded = false;
+        let input_result =
+            apply_client_terminal_input_events(runtime, &events, true, &mut keyboard_forwarded);
+        let scroll_changed = runtime.scroll_metrics() != scroll_before;
+        if keyboard_forwarded {
+            self.note_interactive_input(dock_pane_id, Instant::now());
+        }
+        if let Err(err) = input_result {
+            warn!(client_id, pane_id, err = %err, "targeted client dock input failed");
+        }
+        foreground_changed || scroll_changed
     }
 
     fn runtime_for_terminal_id_string(
@@ -2373,6 +2452,9 @@ impl HeadlessServer {
                 let pixel_mouse = self.clients.get(&client_id).is_some_and(|client| {
                     client.pixel_mouse && client.host_sgr_pixels_active == Some(true)
                 });
+                if pane_id == crate::app::dock::DOCK_PANE_ID {
+                    return self.handle_client_shell_dock_input(client_id, pixel_mouse, events);
+                }
                 let mut events = events;
                 let Some((workspace_index, runtime_pane_id)) = self.app.parse_pane_id(&pane_id)
                 else {
@@ -3061,8 +3143,10 @@ impl HeadlessServer {
                 .get(&client_id)
                 .is_some_and(|client| matches!(client.mode, ClientConnectionMode::ClientShell))
         }) {
-            self.app.state.view.terminal_area =
-                Rect::new(0, 0, self.effective_size.0, self.effective_size.1);
+            self.app.state.view.terminal_area = crate::ui::dock_tab_area(
+                &self.app.state,
+                Rect::new(0, 0, self.effective_size.0, self.effective_size.1),
+            );
         }
         let mut response = if matches!(
             &msg.request.method,

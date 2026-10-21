@@ -552,6 +552,94 @@ pub(super) fn resize_popup_pane(
     }
 }
 
+/// The dock column at the right edge of `area` and the terminal inside it,
+/// right of a one-column separator. The tab keeps at least one column.
+pub(crate) fn dock_column_rects(
+    width: Option<crate::popup_size::PopupSize>,
+    area: Rect,
+) -> Option<(Rect, Rect)> {
+    let width = width
+        .unwrap_or(crate::popup_size::PopupSize::Percent(30))
+        .resolve(area.width)
+        .min(area.width.saturating_sub(1));
+    if width < 2 {
+        return None;
+    }
+    let outer = Rect::new(area.right() - width, area.y, width, area.height);
+    let inner = Rect::new(outer.x + 1, outer.y, width - 1, outer.height);
+    Some((outer, inner))
+}
+
+pub(crate) fn dock_rects(app: &AppState, area: Rect) -> Option<(Rect, Rect)> {
+    dock_column_rects(app.dock_pane.as_ref()?.width, area)
+}
+
+/// The part of `area` left for tab layouts once the dock takes its column.
+pub(crate) fn dock_tab_area(app: &AppState, area: Rect) -> Rect {
+    match dock_rects(app, area) {
+        Some((outer, _)) => Rect {
+            width: area.width - outer.width,
+            ..area
+        },
+        None => area,
+    }
+}
+
+pub(crate) fn resize_dock_pane(
+    app: &AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+    area: Rect,
+    cell_size: crate::kitty_graphics::HostCellSize,
+) {
+    let Some(dock) = app.dock_pane.as_ref() else {
+        return;
+    };
+    let Some((_outer, inner)) = dock_rects(app, area) else {
+        return;
+    };
+    if app.direct_attach_resize_locks.contains(&dock.terminal_id) {
+        return;
+    }
+    if let Some(rt) = terminal_runtimes.get(&dock.terminal_id) {
+        rt.resize(
+            inner.height,
+            inner.width,
+            cell_size.width_px,
+            cell_size.height_px,
+        );
+    }
+}
+
+pub(crate) fn render_dock(
+    app: &AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+    frame: &mut Frame,
+) {
+    let Some(dock) = app.dock_pane.as_ref() else {
+        return;
+    };
+    let Some((outer, inner)) = dock_rects(app, frame.area()) else {
+        return;
+    };
+    let color = if app.dock_focused {
+        app.palette.accent
+    } else {
+        app.palette.overlay0
+    };
+    let buf = frame.buffer_mut();
+    for y in outer.top()..outer.bottom() {
+        if let Some(cell) = buf.cell_mut((outer.x, y)) {
+            cell.reset();
+            cell.set_symbol("│");
+            cell.set_style(Style::default().fg(color));
+        }
+    }
+    if let Some(rt) = terminal_runtimes.get(&dock.terminal_id) {
+        let show_cursor = app.dock_focused && !pane_is_scrolled_back(rt);
+        rt.render(frame, inner, show_cursor);
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 struct LineCell {
     up: bool,
@@ -954,6 +1042,64 @@ mod tests {
         frame: &mut Frame,
     ) {
         render_pane_borders(app, ws, &app.view.pane_infos, split_borders, frame);
+    }
+
+    #[test]
+    fn dock_takes_right_column_and_shrinks_tab_area() {
+        let mut app = AppState::test_new();
+        let mut ws = Workspace::test_new("dock");
+        let bottom = ws.test_split(Direction::Vertical);
+        app.workspaces = vec![ws];
+        app.active = Some(0);
+        let runtimes = TerminalRuntimeRegistry::new();
+        let area = Rect::new(0, 0, 339, 105);
+        let infos = |app: &AppState| {
+            super::super::tab_surface::compute_tab_surface(
+                app,
+                &runtimes,
+                area,
+                false,
+                crate::kitty_graphics::HostCellSize::default(),
+            )
+            .pane_infos
+        };
+
+        assert_eq!(dock_tab_area(&app, area), area);
+        assert!(infos(&app).iter().all(|info| info.rect.right() == 339));
+
+        app.dock_pane = Some(crate::app::state::DockPaneState {
+            pane_id: PaneId::alloc(),
+            terminal_id: crate::terminal::TerminalId::alloc(),
+            width: Some(crate::popup_size::PopupSize::Percent(30)),
+            plugin: None,
+        });
+        let (outer, inner) = dock_rects(&app, area).unwrap();
+        assert_eq!(outer, Rect::new(238, 0, 101, 105));
+        assert_eq!(inner, Rect::new(239, 0, 100, 105));
+        assert_eq!(dock_tab_area(&app, area), Rect::new(0, 0, 238, 105));
+        // Both halves of a vertical split end at the dock, top to bottom.
+        let split = infos(&app);
+        assert_eq!(split.len(), 2);
+        assert!(split.iter().all(|info| info.rect.right() <= 238));
+        assert_eq!(split.iter().map(|info| info.rect.height).sum::<u16>(), 105);
+
+        app.workspaces[0].tabs[0].layout.focus_pane(bottom);
+        app.workspaces[0].tabs[0].zoomed = true;
+        let zoomed = infos(&app);
+        assert_eq!(zoomed.len(), 1);
+        assert_eq!(zoomed[0].rect.right(), 238);
+
+        let (outer, _) = dock_rects(&app, Rect::new(0, 0, 100, 40)).unwrap();
+        assert_eq!(outer.width, 30);
+        assert_eq!(
+            dock_column_rects(Some(crate::popup_size::PopupSize::Percent(100)), area)
+                .unwrap()
+                .0
+                .width,
+            338,
+            "the tab keeps one column"
+        );
+        assert!(dock_column_rects(None, Rect::new(0, 0, 2, 10)).is_none());
     }
 
     #[test]

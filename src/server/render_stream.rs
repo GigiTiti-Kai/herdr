@@ -555,14 +555,33 @@ pub(crate) fn render_tab_surface_virtual(
         pane_infos: &layout.pane_infos,
         split_borders: &layout.split_borders,
     };
-    let cursor = crate::ui::tab_surface_cursor(app_state, terminal_runtimes, surface);
-    let hyperlinks = crate::ui::tab_surface_hyperlinks(app_state, terminal_runtimes, surface);
+    let mut cursor = crate::ui::tab_surface_cursor(app_state, terminal_runtimes, surface);
+    let mut hyperlinks = crate::ui::tab_surface_hyperlinks(app_state, terminal_runtimes, surface);
+    let dock = app_state.dock_pane.as_ref().and_then(|dock| {
+        let (_, inner) = crate::ui::dock_rects(app_state, area)?;
+        Some((terminal_runtimes.get(&dock.terminal_id)?, inner))
+    });
+    if let Some((runtime, inner)) = dock {
+        hyperlinks.extend(runtime.visible_hyperlinks(inner));
+        if app_state.dock_focused {
+            cursor = (!runtime.synchronized_output_active())
+                .then(|| runtime.cursor_state(inner, true))
+                .flatten()
+                .map(|cursor| CursorState {
+                    x: cursor.x,
+                    y: cursor.y,
+                    visible: cursor.visible && !crate::ui::pane_is_scrolled_back(runtime),
+                    shape: cursor.shape,
+                });
+        }
+    }
 
     let backend = CursorTrackingBackend::new(area.width, area.height);
     let mut terminal = ratatui::Terminal::new(backend).expect("TestBackend::new should never fail");
     terminal
         .draw(|frame| {
             crate::ui::render_tab_surface(app_state, terminal_runtimes, surface, frame);
+            crate::ui::render_dock(app_state, terminal_runtimes, frame);
         })
         .expect("render to TestBackend should never fail");
 

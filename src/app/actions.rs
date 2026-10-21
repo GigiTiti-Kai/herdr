@@ -230,6 +230,7 @@ impl AppState {
         let Some(tab_idx) = ws.find_tab_index_for_pane(pane_id) else {
             return false;
         };
+        self.dock_focused = false;
         let previous = self.current_pane_focus_target();
         let target = PaneFocusTarget {
             workspace_id: ws.id.clone(),
@@ -386,6 +387,7 @@ impl AppState {
 
     pub fn switch_workspace(&mut self, idx: usize) {
         if idx < self.workspaces.len() {
+            self.dock_focused = false;
             let previous_focus = self.current_pane_focus_target();
             self.active = Some(idx);
             self.selected = idx;
@@ -415,6 +417,7 @@ impl AppState {
             return false;
         }
 
+        self.dock_focused = false;
         let previous_focus = self.current_pane_focus_target();
         let workspace_changed = self.active != Some(ws_idx);
         self.active = Some(ws_idx);

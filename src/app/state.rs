@@ -22,6 +22,16 @@ pub(crate) struct PopupPaneState {
     pub height: Option<crate::popup_size::PopupSize>,
 }
 
+/// Session-wide right column shown beside every tab. Like the popup, it is
+/// outside workspace layouts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DockPaneState {
+    pub pane_id: PaneId,
+    pub terminal_id: crate::terminal::TerminalId,
+    pub width: Option<crate::popup_size::PopupSize>,
+    pub plugin: Option<PluginPaneRecord>,
+}
+
 use crate::terminal_theme::{HostAppearance, TerminalTheme};
 use crate::workspace::Workspace;
 
@@ -875,6 +885,10 @@ pub struct AppState {
     pub(crate) plugin_panes: std::collections::HashMap<PaneId, PluginPaneRecord>,
     /// Session-modal terminal popup. This is intentionally outside workspace layouts.
     pub(crate) popup_pane: Option<PopupPaneState>,
+    /// Session-wide right column, addressed publicly as `dock`.
+    pub(crate) dock_pane: Option<DockPaneState>,
+    /// Whether keyboard input targets the dock instead of the tiled focused pane.
+    pub(crate) dock_focused: bool,
     /// Recent plugin action/event command executions.
     pub(crate) plugin_command_logs: Vec<crate::api::schema::PluginCommandLogInfo>,
     pub(crate) next_plugin_command_log_id: u64,
@@ -1113,6 +1127,8 @@ impl AppState {
             installed_plugins: std::collections::HashMap::new(),
             plugin_panes: std::collections::HashMap::new(),
             popup_pane: None,
+            dock_pane: None,
+            dock_focused: false,
             plugin_command_logs: Vec::new(),
             next_plugin_command_log_id: 1,
             plugin_commands_in_flight: 0,
@@ -1299,6 +1315,21 @@ impl AppState {
                 "popup terminal {} must not be attached to a tiled pane",
                 popup.terminal_id
             );
+        }
+        if let Some(dock) = &self.dock_pane {
+            assert!(
+                self.terminals.contains_key(&dock.terminal_id),
+                "dock {:?} references missing terminal {}",
+                dock.pane_id,
+                dock.terminal_id
+            );
+            assert!(
+                !attached_terminal_ids.contains(&dock.terminal_id),
+                "dock terminal {} must not be attached to a tiled pane",
+                dock.terminal_id
+            );
+        } else {
+            assert!(!self.dock_focused, "dock focus requires an open dock");
         }
         for &pane_id in self.plugin_panes.keys() {
             assert_live_pane(pane_id, "plugin pane record");

@@ -585,6 +585,22 @@ fn server_survives_hangup_and_logs_why_it_stops() {
 
     let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
+    // The socket and `ping` are served before the event loop installs its
+    // SIGTERM handler; a loop-handled request proves the handler is in place.
+    wait_for_log_line(
+        &server_log_path(&config_home),
+        "herdr starting",
+        Duration::from_secs(10),
+    );
+    let mut stream = UnixStream::connect(&api_socket).unwrap();
+    writeln!(
+        stream,
+        r#"{{"id":"ready","method":"workspace.list","params":{{}}}}"#
+    )
+    .unwrap();
+    let mut response = String::new();
+    BufReader::new(stream).read_line(&mut response).unwrap();
+    assert!(response.contains("\"result\""), "{response}");
     let pid = spawned.child.process_id().expect("server pid") as libc::pid_t;
 
     assert_eq!(unsafe { libc::kill(pid, libc::SIGHUP) }, 0);

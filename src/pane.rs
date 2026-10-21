@@ -151,6 +151,9 @@ enum PaneLaunchIdentity {
         pane_id: String,
     },
     OmitPane,
+    PaneOnly {
+        pane_id: String,
+    },
 }
 
 impl PaneLaunchEnv {
@@ -177,6 +180,12 @@ impl PaneLaunchEnv {
 
     pub(crate) fn without_pane_identity(mut self) -> Self {
         self.identity = PaneLaunchIdentity::OmitPane;
+        self
+    }
+
+    /// Names a pane that belongs to no tab or workspace, such as the dock.
+    pub(crate) fn with_pane_id_only(mut self, pane_id: String) -> Self {
+        self.identity = PaneLaunchIdentity::PaneOnly { pane_id };
         self
     }
 }
@@ -215,6 +224,11 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
         }
         PaneLaunchIdentity::OmitPane => {
             cmd.env_remove(crate::integration::HERDR_PANE_ID_ENV_VAR);
+        }
+        PaneLaunchIdentity::PaneOnly { pane_id } => {
+            cmd.env_remove(crate::integration::HERDR_WORKSPACE_ID_ENV_VAR);
+            cmd.env_remove(crate::integration::HERDR_TAB_ID_ENV_VAR);
+            cmd.env(crate::integration::HERDR_PANE_ID_ENV_VAR, pane_id);
         }
     }
 }

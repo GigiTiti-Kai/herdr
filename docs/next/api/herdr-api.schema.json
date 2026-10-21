@@ -3713,7 +3713,8 @@
             "popup",
             "split",
             "tab",
-            "zoomed"
+            "zoomed",
+            "dock"
           ],
           "type": "string"
         },
@@ -9062,7 +9063,8 @@
             "popup",
             "split",
             "tab",
-            "zoomed"
+            "zoomed",
+            "dock"
           ],
           "type": "string"
         },

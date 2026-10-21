@@ -55,6 +55,12 @@ pub(super) fn snapshot_with_completions(
             app.public_pane_id(workspace_index, pane_id)
         })
         .or_else(|| snapshot.focused_pane_id.clone());
+    // Keys follow focused_pane_id, so the dock takes them while it is focused.
+    let focused_pane_id = if app.state.dock_focused && app.state.dock_pane.is_some() {
+        Some(crate::app::dock::DOCK_PANE_ID.to_owned())
+    } else {
+        focused_pane_id
+    };
     let workspaces: Vec<protocol::ClientShellWorkspace> = snapshot
         .workspaces
         .into_iter()
@@ -352,7 +358,7 @@ pub(super) fn render_pane_surface(
     graphics_delivery: &crate::kitty_graphics::surface::DeliveryCache,
     client_id: u64,
 ) -> Result<RenderedPaneSurface, SurfaceRenderDeferred> {
-    let layout = crate::ui::compute_tab_surface_for(
+    let mut layout = crate::ui::compute_tab_surface_for(
         &app.state,
         &app.terminal_runtimes,
         target,
@@ -360,6 +366,27 @@ pub(super) fn render_pane_surface(
         resize_panes,
         cell_size,
     );
+    if app.state.dock_focused && app.state.dock_pane.is_some() {
+        // The dock owns the cursor and focus highlight while it takes keys.
+        for pane in &mut layout.pane_infos {
+            pane.is_focused = false;
+        }
+    }
+    let dock_rects = crate::ui::dock_rects(&app.state, area);
+    if resize_panes {
+        crate::ui::resize_dock_pane(&app.state, &app.terminal_runtimes, area, cell_size);
+    }
+    let dock_before = dock_rects
+        .and(app.state.dock_pane.as_ref())
+        .and_then(|dock| app.terminal_runtimes.get(&dock.terminal_id))
+        .map(|runtime| {
+            let (synchronized, epoch) = runtime.synchronized_output_state();
+            if synchronized {
+                return Err(SurfaceRenderDeferred::Synchronized);
+            }
+            Ok((epoch, runtime.content_seq()))
+        })
+        .transpose()?;
     let mut content_revisions_before = std::collections::HashMap::new();
     if let Some(target) = target {
         for pane in &layout.pane_infos {
@@ -400,7 +427,7 @@ pub(super) fn render_pane_surface(
             layout,
             area,
         );
-    let panes = target
+    let mut panes: Vec<protocol::PaneSurfacePane> = target
         .map(|target| {
             let workspace_index = target.workspace_index;
             layout
@@ -463,6 +490,45 @@ pub(super) fn render_pane_surface(
                 .collect()
         })
         .unwrap_or_default();
+    if let (Some((outer, inner)), Some(dock), Some((_, revision_before))) =
+        (dock_rects, app.state.dock_pane.as_ref(), dock_before)
+    {
+        if let Some(runtime) = app.terminal_runtimes.get(&dock.terminal_id) {
+            let after = runtime.content_seq();
+            let (pixel_width, pixel_height) = if cell_size.is_known() {
+                (
+                    u32::from(inner.width) * cell_size.width_px,
+                    u32::from(inner.height) * cell_size.height_px,
+                )
+            } else {
+                (0, 0)
+            };
+            panes.push(protocol::PaneSurfacePane {
+                pane_id: crate::app::dock::DOCK_PANE_ID.to_owned(),
+                content_revision: if revision_before == after && after.is_multiple_of(2) {
+                    after
+                } else {
+                    after | 1
+                },
+                rect: outer.into(),
+                inner_rect: inner.into(),
+                scrollbar_rect: None,
+                scroll: runtime.scroll_metrics().map(|metrics| {
+                    protocol::PaneSurfaceScrollMetrics {
+                        offset_from_bottom: metrics.offset_from_bottom as u64,
+                        max_offset_from_bottom: metrics.max_offset_from_bottom as u64,
+                        viewport_rows: metrics.viewport_rows as u64,
+                    }
+                }),
+                focused: app.state.dock_focused,
+                mouse_reporting: runtime.mouse_reporting_enabled(),
+                sgr_pixel_mouse: runtime.sgr_pixel_mouse_enabled(),
+                alternate_screen_active: runtime.alternate_screen_active(),
+                pixel_width,
+                pixel_height,
+            });
+        }
+    }
     let pane_frames = layout
         .pane_infos
         .iter()
@@ -523,6 +589,22 @@ pub(super) fn render_pane_surface(
                 if after_epoch != epoch {
                     return Err(SurfaceRenderDeferred::Changed);
                 }
+            }
+        }
+    }
+    if let Some((before, _)) = dock_before {
+        if let Some(runtime) = app
+            .state
+            .dock_pane
+            .as_ref()
+            .and_then(|dock| app.terminal_runtimes.get(&dock.terminal_id))
+        {
+            let (synchronized, after_epoch) = runtime.synchronized_output_state();
+            if synchronized {
+                return Err(SurfaceRenderDeferred::Synchronized);
+            }
+            if after_epoch != before {
+                return Err(SurfaceRenderDeferred::Changed);
             }
         }
     }

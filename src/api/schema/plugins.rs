@@ -449,6 +449,7 @@ pub enum PluginPanePlacement {
     Split,
     Tab,
     Zoomed,
+    Dock,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

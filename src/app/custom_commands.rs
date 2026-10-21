@@ -136,6 +136,14 @@ impl App {
         &mut self,
         params: &crate::api::schema::CommandInvokeParams,
     ) -> Result<(), (&'static str, String)> {
+        if params.pane_id.as_deref() == Some(crate::app::dock::DOCK_PANE_ID) {
+            // The dock belongs to no tab; commands run against the active tab and keep dock focus.
+            return if self.state.dock_pane.is_some() {
+                Ok(())
+            } else {
+                Err(("pane_not_found", "pane not found: dock".to_owned()))
+            };
+        }
         if let Some(pane_id) = params.pane_id.as_deref() {
             let Some((workspace_index, pane)) = self.parse_pane_id(pane_id) else {
                 return Err(("pane_not_found", format!("pane not found: {pane_id}")));
@@ -777,6 +785,38 @@ mod tests {
                 ..
             }
         ));
+        crate::app::api::test_support::shutdown_test_runtimes(&mut app);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn command_from_focused_dock_runs_against_active_tab_and_keeps_dock_focus() {
+        let mut app = test_app_with_workspace();
+        let mut command = binding(crate::config::CustomCommandAction::Split);
+        command.command = crate::app::api::test_support::exiting_test_command().into();
+        install(&mut app, command);
+        app.install_test_dock_runtime(
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(20, 10, b"dock"),
+            None,
+        );
+        app.state.dock_focused = true;
+        let command_id = app.client_shell_command_manifest()[0].command_id.clone();
+
+        let response = app.handle_command_invoke(
+            "request-1".into(),
+            crate::api::schema::CommandInvokeParams {
+                command_id,
+                workspace_id: None,
+                tab_id: Some(app.public_tab_id(0, 0).unwrap()),
+                pane_id: Some(crate::app::dock::DOCK_PANE_ID.into()),
+                selection: None,
+            },
+        );
+
+        let success: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.result, crate::api::schema::ResponseResult::Ok {});
+        assert_eq!(app.state.workspaces[0].tabs[0].panes.len(), 2);
+        assert!(app.state.dock_pane.is_some());
         crate::app::api::test_support::shutdown_test_runtimes(&mut app);
     }
 

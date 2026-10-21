@@ -46,6 +46,19 @@ impl HeadlessServer {
                     .map(|runtime| (runtime, popup.pane_id));
             }
         }
+        if let Some(dock) = self
+            .app
+            .state
+            .dock_pane
+            .as_ref()
+            .filter(|_| self.app.state.dock_focused)
+        {
+            return self
+                .app
+                .terminal_runtimes
+                .get(&dock.terminal_id)
+                .map(|runtime| (runtime, dock.pane_id));
+        }
         let target = self.shell_target_for_client(client_id)?;
         let tab = self
             .app
@@ -322,6 +335,9 @@ impl HeadlessServer {
                     }
                 }
             }
+            if let Some(dock) = &self.app.state.dock_pane {
+                pane_ids.insert(dock.pane_id);
+            }
         }
         if !direct_terminal_targets.is_empty() {
             for workspace in &self.app.state.workspaces {
@@ -407,6 +423,15 @@ impl HeadlessServer {
         {
             return Some(&popup.terminal_id);
         }
+        if let Some(dock) = self
+            .app
+            .state
+            .dock_pane
+            .as_ref()
+            .filter(|dock| dock.pane_id == pane_id)
+        {
+            return Some(&dock.terminal_id);
+        }
         self.app
             .find_pane(pane_id)
             .map(|(_, pane)| &pane.attached_terminal_id)
@@ -425,6 +450,15 @@ impl HeadlessServer {
                 .is_some_and(|popup| popup.pane_id == pane_id)
             {
                 return self.popup_owner_tab_id == self.shell_tab_id_for_client(client_id);
+            }
+            if self
+                .app
+                .state
+                .dock_pane
+                .as_ref()
+                .is_some_and(|dock| dock.pane_id == pane_id)
+            {
+                return true;
             }
             let Some(target) = self.shell_target_for_client(client_id) else {
                 return false;
@@ -453,6 +487,12 @@ impl HeadlessServer {
 
     fn render_and_stream_with_graphics_limit(&mut self, graphics_frame_limit: usize) {
         let full_started = crate::render_prof::timer();
+        let dock_geometry = self.app.state.dock_pane.as_ref().map(|dock| dock.width);
+        if dock_geometry != self.dock_geometry {
+            // Opening, closing, or resizing the dock changes the width every tab lays out in.
+            self.dock_geometry = dock_geometry;
+            self.reapply_controlled_shell_tab_geometry(false);
+        }
         let render_targets = render_targets(&self.clients, self.foreground_client_id);
 
         if render_targets.is_empty() {

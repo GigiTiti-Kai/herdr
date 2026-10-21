@@ -212,8 +212,8 @@ pub struct HeadlessServer {
     tab_geometry_controllers: HashMap<String, u64>,
     /// Stable tab id whose viewers may see and interact with the one terminal popup.
     popup_owner_tab_id: Option<String>,
-    /// Whether tab geometry was last applied with the dock column present.
-    dock_geometry_open: bool,
+    /// The dock width tab geometry was last applied with (`None`: no dock).
+    dock_geometry: Option<Option<crate::popup_size::PopupSize>>,
     /// Process-local identity used to reject shell replacements from an earlier server boot.
     client_shell_boot_id: String,
     /// Outer window title last pushed, paired with the client that received it.
@@ -368,7 +368,7 @@ impl HeadlessServer {
             foreground_client_id: None,
             tab_geometry_controllers: HashMap::new(),
             popup_owner_tab_id: None,
-            dock_geometry_open: false,
+            dock_geometry: None,
             client_shell_boot_id: format!(
                 "{}-{}",
                 std::process::id(),

@@ -118,7 +118,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         foreground_client_id: None,
         tab_geometry_controllers: HashMap::new(),
         popup_owner_tab_id: None,
-        dock_geometry_open: false,
+        dock_geometry: None,
         client_shell_boot_id: "test-boot".into(),
         sent_window_title: None,
         api_window_title: None,

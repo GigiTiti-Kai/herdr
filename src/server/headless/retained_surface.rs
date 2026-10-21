@@ -249,13 +249,11 @@ impl HeadlessServer {
         if pty_sources.is_empty()
             || self.app.full_redraw_pending
             || self.app.state.popup_pane.is_some()
-            // The dock is not a layout pane, so only the full renderer repaints it.
-            || self
-                .app
-                .state
-                .dock_pane
-                .as_ref()
-                .is_some_and(|dock| pty_sources.contains(&dock.pane_id))
+            // The dock is not a layout pane, so only the full renderer repaints it
+            // and draws its cursor while it is focused.
+            || self.app.state.dock_pane.as_ref().is_some_and(|dock| {
+                self.app.state.dock_focused || pty_sources.contains(&dock.pane_id)
+            })
             || self.app.state.reveal_hidden_cursor_for_cjk_ime
         {
             fallback!("unsafe_state");

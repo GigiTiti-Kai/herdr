@@ -487,10 +487,10 @@ impl HeadlessServer {
 
     fn render_and_stream_with_graphics_limit(&mut self, graphics_frame_limit: usize) {
         let full_started = crate::render_prof::timer();
-        let dock_open = self.app.state.dock_pane.is_some();
-        if dock_open != self.dock_geometry_open {
-            // Opening or closing the dock changes the width every tab lays out in.
-            self.dock_geometry_open = dock_open;
+        let dock_geometry = self.app.state.dock_pane.as_ref().map(|dock| dock.width);
+        if dock_geometry != self.dock_geometry {
+            // Opening, closing, or resizing the dock changes the width every tab lays out in.
+            self.dock_geometry = dock_geometry;
             self.reapply_controlled_shell_tab_geometry(false);
         }
         let render_targets = render_targets(&self.clients, self.foreground_client_id);

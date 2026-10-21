@@ -288,6 +288,10 @@ async fn dock_receives_keys_only_while_focused() {
         .filter(|pane| pane.pane_id != DOCK)
         .all(|pane| !pane.focused));
 
+    // Tiled output cannot take the retained path: only a full render draws the dock cursor.
+    write_shared_test_pane(&mut server, right, b" more");
+    assert!(!server.render_retained_pane_surface_and_stream(&HashSet::from([right])));
+
     server.handle_server_event(ServerEvent::ClientShellPaneInput {
         client_id: 41,
         pane_id: DOCK.into(),
@@ -410,14 +414,15 @@ async fn dock_focus_returns_to_tiled_pane_on_close() {
     );
     focus_dock(&mut server, 61);
 
+    // The close-pane key sends the focused pane id, which is `dock` here.
     let closed = shell_request(
         &mut server,
         61,
-        crate::api::schema::Method::PluginPaneClose(crate::api::schema::PluginPaneCloseParams {
+        crate::api::schema::Method::PaneClose(crate::api::schema::PaneTarget {
             pane_id: DOCK.into(),
         }),
     );
-    assert_eq!(closed["result"]["pane_id"], DOCK, "{closed}");
+    assert_eq!(closed["result"]["type"], "ok", "{closed}");
     assert!(server.app.state.dock_pane.is_none());
     assert!(!server.app.state.dock_focused);
     server.render_and_stream();

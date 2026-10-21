@@ -240,20 +240,26 @@ impl App {
         &self,
         params: &PaneSelectionReadParams,
     ) -> Result<String, (&'static str, String)> {
-        let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
-            return Err((
+        let not_found = || {
+            (
                 "pane_not_found",
                 format!("pane not found: {}", params.pane_id),
-            ));
+            )
         };
-        let Some(runtime) =
-            self.state
+        let (runtime, pane_id) = if params.pane_id == DOCK_PANE_ID {
+            let dock = self.state.dock_pane.as_ref().ok_or_else(not_found)?;
+            let runtime = self
+                .terminal_runtimes
+                .get(&dock.terminal_id)
+                .ok_or_else(not_found)?;
+            (runtime, dock.pane_id)
+        } else {
+            let (ws_idx, pane_id) = self.parse_pane_id(&params.pane_id).ok_or_else(not_found)?;
+            let runtime = self
+                .state
                 .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
-        else {
-            return Err((
-                "pane_not_found",
-                format!("pane not found: {}", params.pane_id),
-            ));
+                .ok_or_else(not_found)?;
+            (runtime, pane_id)
         };
         let before = runtime.content_seq();
         if params
@@ -2002,6 +2008,13 @@ impl App {
     }
 
     pub(super) fn handle_pane_close(&mut self, id: String, target: PaneTarget) -> String {
+        if target.pane_id == DOCK_PANE_ID {
+            return if self.close_dock_pane() {
+                encode_success(id, ResponseResult::Ok {})
+            } else {
+                pane_not_found(id, &target.pane_id)
+            };
+        }
         match self.close_pane(id.clone(), &target) {
             Ok(()) => encode_success(id, ResponseResult::Ok {}),
             Err(response) => response,

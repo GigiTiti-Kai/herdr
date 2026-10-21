@@ -610,8 +610,8 @@ every tab. It accepts `width` only; `height`, `workspace_id`, `target_pane_id`,
 and `direction` return `invalid_params`, and opening a second dock returns
 `ui_busy`. The dock takes focus on open only when `focus` is true. It is addressed by the
 pane ID `dock` in `pane.get`, `pane.focus`, `pane.focus_direction` (Right from a
-pane without a right neighbor enters it; Left leaves it), `plugin.pane.focus`,
-and `plugin.pane.close`. `pane.get` reports empty `workspace_id` and `tab_id`;
+pane without a right neighbor enters it; Left leaves it), `pane.close`,
+`plugin.pane.focus`, and `plugin.pane.close`. `pane.get` reports empty `workspace_id` and `tab_id`;
 `pane.list` does not include it, and it emits no pane lifecycle events.
 
 ## Socket transport

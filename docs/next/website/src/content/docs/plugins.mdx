@@ -349,7 +349,8 @@ close the dock to return to the tiled pane. The prefix key keeps working while
 the dock has focus, and a popup on the active tab still takes input first.
 The dock is addressed as `dock`: `pane get dock` reports it with empty
 `workspace_id` and `tab_id`, and `plugin pane focus dock` and
-`plugin pane close dock` focus and close it. Its process receives
+`plugin pane close dock` (or `pane close dock`) focus and close it. Custom
+commands invoked while the dock has focus run against the active tab. Its process receives
 `HERDR_PANE_ID=dock` but no `HERDR_TAB_ID` or `HERDR_WORKSPACE_ID`. Like the
 popup, the dock is not listed by `pane list`, emits no pane lifecycle events, and
 is not restored after a server restart.

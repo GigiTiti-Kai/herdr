@@ -686,8 +686,12 @@ impl App {
     ) -> String {
         // The dock sits right of every tab: Right from a pane with no right
         // neighbor enters it, Left from the dock returns to the tiled focused pane.
-        let from_dock =
-            params.pane_id.as_deref() == Some(DOCK_PANE_ID) && self.state.dock_pane.is_some();
+        // An omitted pane id means the focused pane, which is the dock while it has focus.
+        let from_dock = self.state.dock_pane.is_some()
+            && params
+                .pane_id
+                .as_deref()
+                .map_or(self.state.dock_focused, |pane_id| pane_id == DOCK_PANE_ID);
         let source = if from_dock {
             None
         } else {

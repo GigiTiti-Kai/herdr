@@ -326,6 +326,44 @@ async fn dock_receives_keys_only_while_focused() {
         latest_snapshot(&control).focused_pane_id.as_deref(),
         Some(right_id.as_str())
     );
+
+    // `herdr pane focus --direction` outside a pane omits the pane id: it means the focused pane.
+    let omitted = |direction| {
+        crate::api::schema::Method::PaneFocusDirection(
+            crate::api::schema::PaneFocusDirectionParams {
+                pane_id: None,
+                direction,
+            },
+        )
+    };
+    let entered = shell_request(
+        &mut server,
+        41,
+        omitted(crate::api::schema::PaneDirection::Right),
+    );
+    assert_eq!(
+        entered["result"]["focus"]["focused_pane_id"], DOCK,
+        "{entered}"
+    );
+    let up = shell_request(
+        &mut server,
+        41,
+        omitted(crate::api::schema::PaneDirection::Up),
+    );
+    assert_eq!(up["result"]["focus"]["changed"], false, "{up}");
+    assert_eq!(up["result"]["focus"]["source_pane_id"], DOCK);
+    let left_out = shell_request(
+        &mut server,
+        41,
+        omitted(crate::api::schema::PaneDirection::Left),
+    );
+    assert_eq!(left_out["result"]["focus"]["changed"], true, "{left_out}");
+    assert_eq!(left_out["result"]["focus"]["source_pane_id"], DOCK);
+    assert_eq!(
+        left_out["result"]["focus"]["focused_pane_id"],
+        right_id.as_str()
+    );
+    assert!(!server.app.state.dock_focused);
     server.app.state.assert_invariants_for_test();
 
     shutdown_test_runtimes(&mut server);

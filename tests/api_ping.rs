@@ -2656,6 +2656,8 @@ fn metadata_status_subscription_filter_and_ttl_expiry_are_observable() {
     cleanup_spawned_herdr(child, base);
 }
 
+// The helpers it needs and the cwd lookup it checks are Linux-only.
+#[cfg(target_os = "linux")]
 #[test]
 fn foreground_cwd_unwraps_shell_wrapper_around_agent() {
     // `ccy`-style launchers run `( ... claude )`: the bash subshell leads the

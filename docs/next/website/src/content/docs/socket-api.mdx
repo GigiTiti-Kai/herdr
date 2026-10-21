@@ -605,6 +605,15 @@ pane; tab panes can target a workspace. Split, tab, zoomed, and overlay panes
 behave like normal Herdr panes, and `plugin.pane.focus` and `plugin.pane.close`
 continue to operate on those panes.
 
+`placement: "dock"` opens a singleton full-height column at the right edge of
+every tab. It accepts `width` only; `height`, `workspace_id`, `target_pane_id`,
+and `direction` return `invalid_params`, and opening a second dock returns
+`ui_busy`. The dock takes focus on open only when `focus` is true. It is addressed by the
+pane ID `dock` in `pane.get`, `pane.focus`, `pane.focus_direction` (Right from a
+pane without a right neighbor enters it; Left leaves it), `plugin.pane.focus`,
+and `plugin.pane.close`. `pane.get` reports empty `workspace_id` and `tab_id`;
+`pane.list` does not include it, and it emits no pane lifecycle events.
+
 ## Socket transport
 
 Herdr uses newline-delimited JSON over a local socket. On Unix, that socket is a

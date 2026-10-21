@@ -301,7 +301,7 @@ while Windows clients connect to a named pipe. CLI calls through
 Manifest pane `placement` defaults to `overlay`, which opens a temporary zoomed
 overlay over the active pane and restores the previous focus and zoom when it
 closes. A `plugin.pane.open` request can override the manifest placement with
-`overlay`, `popup`, `split`, `tab`, or `zoomed`.
+`overlay`, `popup`, `split`, `tab`, `zoomed`, or `dock`.
 
 `placement = "popup"` opens a session-modal terminal popup without changing the
 tiled layout. It accepts optional `width` and `height` fields in the manifest or
@@ -336,6 +336,23 @@ Its process does not receive `HERDR_PANE_ID`; the underlying tiled pane remains
 available through `HERDR_PLUGIN_CONTEXT_JSON`.
 Opening a popup returns `ui_busy` while Settings, Copy mode, or another Herdr
 modal is active, and `plugin.pane.open` returns an `ok` result after launch.
+
+`placement = "dock"` opens a singleton terminal column at the right edge of the
+pane area. It spans the full height and stays visible on every tab and
+workspace; tab layouts, including split and zoomed tabs, use the area to its
+left. Only `width` is accepted (cells or a percentage such as `"30%"`, default
+`30%`); `height`, `workspace_id`, `target_pane_id`, and `direction` are rejected,
+and a second open returns `ui_busy`. With `focus: false` (`--no-focus`) the
+dock opens without moving focus. Click it, run `herdr plugin pane focus dock`,
+or move focus right from a pane with no right neighbor to type into it; move focus left, focus any tab, workspace, or pane, or
+close the dock to return to the tiled pane. The prefix key keeps working while
+the dock has focus, and a popup on the active tab still takes input first.
+The dock is addressed as `dock`: `pane get dock` reports it with empty
+`workspace_id` and `tab_id`, and `plugin pane focus dock` and
+`plugin pane close dock` focus and close it. Its process receives
+`HERDR_PANE_ID=dock` but no `HERDR_TAB_ID` or `HERDR_WORKSPACE_ID`. Like the
+popup, the dock is not listed by `pane list`, emits no pane lifecycle events, and
+is not restored after a server restart.
 
 On Windows, build commands, action commands, and event commands resolve common
 `PATHEXT` shims such as `npm.cmd`, `bun.cmd`, and `pnpm.cmd` when the bare

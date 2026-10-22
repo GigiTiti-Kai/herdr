@@ -201,16 +201,25 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         return None;
     }
 
+    // fork: restored claude, codex and hermes skip approval prompts, like the
+    // user's ccy/cxy launchers. agy and grok already do through the user's
+    // `agy` alias and `~/.grok/config.toml`; a second agy flag would repeat it.
     let argv = match (source, agent, session_ref.kind) {
         ("herdr:claude", "claude", AgentSessionRefKind::Id) => {
             vec![
                 "claude".into(),
+                "--dangerously-skip-permissions".into(),
                 "--resume".into(),
                 session_ref.value.clone(),
             ]
         }
         ("herdr:codex", "codex", AgentSessionRefKind::Id) => {
-            vec!["codex".into(), "resume".into(), session_ref.value.clone()]
+            vec![
+                "codex".into(),
+                "resume".into(),
+                "--dangerously-bypass-approvals-and-sandbox".into(),
+                session_ref.value.clone(),
+            ]
         }
         ("herdr:copilot", "copilot", AgentSessionRefKind::Id) => {
             vec!["copilot".into(), format!("--resume={}", session_ref.value)]
@@ -242,6 +251,7 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         ("herdr:hermes", "hermes", AgentSessionRefKind::Id) => {
             vec![
                 "hermes".into(),
+                "--yolo".into(),
                 "--resume".into(),
                 session_ref.value.clone(),
             ]
@@ -462,7 +472,12 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["claude", "--resume", "claude-session"]
+            vec![
+                "claude",
+                "--dangerously-skip-permissions",
+                "--resume",
+                "claude-session"
+            ]
         );
         assert_eq!(
             plan(
@@ -472,7 +487,12 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["codex", "resume", "codex-session"]
+            vec![
+                "codex",
+                "resume",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "codex-session"
+            ]
         );
         assert_eq!(
             plan(
@@ -552,7 +572,7 @@ mod tests {
             )
             .unwrap()
             .argv,
-            vec!["hermes", "--resume", "hermes-session"]
+            vec!["hermes", "--yolo", "--resume", "hermes-session"]
         );
         assert_eq!(
             plan(
@@ -843,7 +863,15 @@ mod tests {
     fn ids_are_data_not_shell_text() {
         let id = "abc; rm -rf /";
         let codex_plan = plan("herdr:codex", "codex", &AgentSessionRef::id(id).unwrap()).unwrap();
-        assert_eq!(codex_plan.argv, vec!["codex", "resume", id]);
+        assert_eq!(
+            codex_plan.argv,
+            vec![
+                "codex",
+                "resume",
+                "--dangerously-bypass-approvals-and-sandbox",
+                id
+            ]
+        );
 
         let copilot_plan = plan(
             "herdr:copilot",

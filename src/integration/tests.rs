@@ -3022,6 +3022,31 @@ fn install_hermes_is_idempotent_for_enabled_entry() {
     let _ = fs::remove_dir_all(base);
 }
 
+/// What installing appends to a Hermes config without a `terminal` section,
+/// and what uninstalling leaves of it.
+const HERMES_PASSTHROUGH: &str = "terminal:\n  client_env_passthrough:\n    - HERDR_ENV\n    - HERDR_PANE_ID\n    - HERDR_TAB_ID\n    - HERDR_WORKSPACE_ID\n    - HERDR_SOCKET_PATH\n    - HERDR_BIN_PATH\n";
+const HERMES_PASSTHROUGH_REMOVED: &str = "terminal:\n  client_env_passthrough: []\n";
+
+#[test]
+fn hermes_config_passes_the_pane_env_to_shared_gateway_sessions() {
+    let input =
+        "terminal:\n  backend: local\n  client_env_passthrough:\n    - GEM_HOME\nmodel: example\n";
+    let installed = ensure_hermes_plugin_enabled(input);
+
+    assert_eq!(
+        installed,
+        "terminal:\n  backend: local\n  client_env_passthrough:\n    - HERDR_ENV\n    - HERDR_PANE_ID\n    - HERDR_TAB_ID\n    - HERDR_WORKSPACE_ID\n    - HERDR_SOCKET_PATH\n    - HERDR_BIN_PATH\n    - GEM_HOME\nmodel: example\nplugins:\n  enabled:\n    - herdr-agent-state\n"
+    );
+    assert_eq!(ensure_hermes_plugin_enabled(&installed), installed);
+    assert_eq!(
+        remove_hermes_plugin_enabled(&installed),
+        "terminal:\n  backend: local\n  client_env_passthrough:\n    - GEM_HOME\nmodel: example\nplugins:\n  enabled: []\n"
+    );
+    assert!(ensure_hermes_plugin_enabled("").starts_with(
+        "plugins:\n  enabled:\n    - herdr-agent-state\nterminal:\n  client_env_passthrough:\n    - HERDR_ENV\n"
+    ));
+}
+
 #[test]
 fn install_hermes_preserves_flat_plugin_list() {
     let _lock = integration_env_lock();
@@ -3041,7 +3066,7 @@ fn install_hermes_preserves_flat_plugin_list() {
     let config = fs::read_to_string(hermes_dir.join("config.yaml")).unwrap();
     assert_eq!(
         config,
-        "plugins:\n  - herdr-agent-state\n  - platforms/discord\n"
+        format!("plugins:\n  - herdr-agent-state\n  - platforms/discord\n{HERMES_PASSTHROUGH}")
     );
 
     std::env::remove_var("HOME");
@@ -3067,7 +3092,7 @@ fn install_hermes_converts_flow_plugin_list_to_block_list() {
     let config = fs::read_to_string(hermes_dir.join("config.yaml")).unwrap();
     assert_eq!(
         config,
-        "plugins:\n  - herdr-agent-state\n  - platforms/discord\n"
+        format!("plugins:\n  - herdr-agent-state\n  - platforms/discord\n{HERMES_PASSTHROUGH}")
     );
 
     std::env::remove_var("HOME");
@@ -3223,7 +3248,10 @@ fn uninstall_hermes_preserves_bare_item_in_config_file() {
     let result = uninstall_hermes().unwrap();
     assert!(result.removed_plugin_dir);
     assert!(result.updated_config);
-    assert_eq!(fs::read_to_string(&config_path).unwrap(), remaining);
+    assert_eq!(
+        fs::read_to_string(&config_path).unwrap(),
+        format!("{remaining}{HERMES_PASSTHROUGH_REMOVED}")
+    );
     assert!(!uninstall_hermes().unwrap().updated_config);
 
     std::env::remove_var(HERMES_HOME_ENV_VAR);
@@ -3339,7 +3367,7 @@ fn hermes_install_and_uninstall_are_idempotent_with_indentless_config() {
 
     let installed = install_hermes().unwrap();
     let first = fs::read_to_string(&config_path).unwrap();
-    assert_eq!(first, "plugins:\n  enabled:\n  - herdr-agent-state\n  - example-plugin\n  disabled:\n  - other-plugin\n");
+    assert_eq!(first, format!("plugins:\n  enabled:\n  - herdr-agent-state\n  - example-plugin\n  disabled:\n  - other-plugin\n{HERMES_PASSTHROUGH}"));
     assert!(installed
         .plugin_dir
         .join(HERMES_PLUGIN_INIT_INSTALL_NAME)
@@ -3350,11 +3378,18 @@ fn hermes_install_and_uninstall_are_idempotent_with_indentless_config() {
     let uninstalled = uninstall_hermes().unwrap();
     assert!(uninstalled.removed_plugin_dir);
     assert!(uninstalled.updated_config);
-    assert_eq!(fs::read_to_string(&config_path).unwrap(), input);
+    let uninstalled_config = format!("{input}{HERMES_PASSTHROUGH_REMOVED}");
+    assert_eq!(
+        fs::read_to_string(&config_path).unwrap(),
+        uninstalled_config
+    );
     let again = uninstall_hermes().unwrap();
     assert!(!again.removed_plugin_dir);
     assert!(!again.updated_config);
-    assert_eq!(fs::read_to_string(&config_path).unwrap(), input);
+    assert_eq!(
+        fs::read_to_string(&config_path).unwrap(),
+        uninstalled_config
+    );
 
     std::env::remove_var(HERMES_HOME_ENV_VAR);
     fs::remove_dir_all(base).unwrap();
@@ -3423,7 +3458,7 @@ fn install_hermes_is_idempotent_for_quoted_flat_plugin_entry() {
     let config = fs::read_to_string(hermes_dir.join("config.yaml")).unwrap();
     assert_eq!(
         config,
-        "plugins:\n  - \"herdr-agent-state\" # installed by herdr\n"
+        format!("plugins:\n  - \"herdr-agent-state\" # installed by herdr\n{HERMES_PASSTHROUGH}")
     );
 
     std::env::remove_var("HOME");

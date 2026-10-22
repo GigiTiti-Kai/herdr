@@ -482,6 +482,14 @@ fn update_hermes_list_item(
         .flatten();
     let plugins_flow = yaml_key_value_at_indent(&lines[plugins_index], 0, owner)
         .and_then(yaml_flow_sequence_items);
+    // A flow mapping or scalar on the owner's line (`terminal: {}`, `null`) cannot
+    // take block children; leave a hand-written owner alone rather than break it.
+    let owner_value = yaml_key_value_at_indent(&lines[plugins_index], 0, owner)
+        .map(yaml_node_content)
+        .unwrap_or_default();
+    if !owner_value.is_empty() && plugins_flow.is_none() {
+        return content.to_string();
+    }
 
     let (key_index, key_indent, key, flow_items) = if let Some(index) = enabled_index {
         let items = yaml_key_value_at_indent(&lines[index], mapping_indent, child)

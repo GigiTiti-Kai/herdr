@@ -22,8 +22,10 @@ def _client_env():
     pane that happened to start it. The gateway binds each session's client environment for its
     turns; HERDR_* reach it only when `terminal.client_env_passthrough` lists them, which
     `herdr integration install hermes` adds.
-    shortcut: the map is frozen when the session is created, so a session resumed in another pane
-    still reports to the pane it started in; herdr restores panes under the same id.
+    shortcut: Hermes freezes the map when the session is created and `--resume` never resends it,
+    so a session resumed in another pane keeps reporting to the pane it started in, and that
+    pane's recorded session follows whichever of its two sessions ran the last turn. herdr
+    restores panes under the same id; upgrade if Hermes resends the client environment on resume.
     """
     try:
         from agent.session_client_env import bound_client_env

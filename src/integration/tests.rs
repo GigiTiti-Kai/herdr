@@ -3045,6 +3045,17 @@ fn hermes_config_passes_the_pane_env_to_shared_gateway_sessions() {
     assert!(ensure_hermes_plugin_enabled("").starts_with(
         "plugins:\n  enabled:\n    - herdr-agent-state\nterminal:\n  client_env_passthrough:\n    - HERDR_ENV\n"
     ));
+    // An inline owner value cannot take block children: it is left as written.
+    for terminal in [
+        "terminal: {}\n",
+        "terminal: {backend: local}\n",
+        "terminal: null\n",
+    ] {
+        assert_eq!(
+            ensure_hermes_plugin_enabled(terminal),
+            format!("{terminal}plugins:\n  enabled:\n    - herdr-agent-state\n")
+        );
+    }
 }
 
 #[test]

@@ -1,4 +1,6 @@
 import importlib.util
+import sys
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -86,6 +88,52 @@ class HermesIntegrationAssetTests(unittest.TestCase):
         context.hooks["pre_llm_call"](session_id="resumed", platform="cli")
 
         self.assertEqual(calls, [("resumed", "resume")])
+
+    def send_in_gateway(self, client_env):
+        """`_send_session` inside a shared gateway that bound `client_env` (None: unbound)."""
+        module = load_asset()
+        gateway = types.ModuleType("gateway.run")
+        gateway._gateway_runner_ref = lambda: object()
+        bound = types.ModuleType("agent.session_client_env")
+        bound.bound_client_env = lambda: client_env
+        modules = {
+            "gateway.run": gateway,
+            "agent": types.ModuleType("agent"),
+            "agent.session_client_env": bound,
+        }
+        gateway_env = {
+            "HERDR_ENV": "1",
+            "HERDR_PANE_ID": "w1:p1",
+            "HERDR_SOCKET_PATH": "/gateway.sock",
+            "PATH": "/gateway/bin",
+        }
+        with mock.patch.dict(sys.modules, modules), mock.patch.dict(
+            module.os.environ, gateway_env, clear=True
+        ), mock.patch.object(module.subprocess, "run") as run:
+            module._send_session("session-1", "resume")
+        return run
+
+    def test_a_gateway_session_reports_to_its_clients_pane_and_server(self):
+        run = self.send_in_gateway(
+            {
+                "HERDR_ENV": "1",
+                "HERDR_PANE_ID": "w2:p3",
+                "HERDR_SOCKET_PATH": "/client.sock",
+                "PATH": "/client/bin",
+            }
+        )
+
+        self.assertEqual(run.call_args.args[0][3], "w2:p3")
+        env = run.call_args.kwargs["env"]
+        self.assertEqual(env["HERDR_SOCKET_PATH"], "/client.sock")
+        # Only HERDR_* come from the client; the report runs in the gateway's own PATH.
+        self.assertEqual(env["PATH"], "/gateway/bin")
+
+    def test_a_gateway_session_without_a_client_pane_reports_nowhere(self):
+        for client_env in ({"PATH": "/client/bin"}, {"HERDR_PANE_ID": "w2:p3"}, None):
+            run = self.send_in_gateway(client_env)
+            self.assertFalse(run.called, client_env)
+
 
 if __name__ == "__main__":
     unittest.main()

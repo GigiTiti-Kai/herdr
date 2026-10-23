@@ -391,21 +391,66 @@ pub(crate) fn is_matching_command_hook(hook: &Value, command: &str) -> bool {
         && hook.get("command").and_then(Value::as_str) == Some(command)
 }
 
+/// Enables the plugin and passes it the client environment it reads.
 pub(crate) fn ensure_hermes_plugin_enabled(content: &str) -> String {
-    update_hermes_enabled_plugin(content, true)
+    update_hermes_client_env(&update_hermes_enabled_plugin(content, true), true)
 }
 
 pub(crate) fn remove_hermes_plugin_enabled(content: &str) -> String {
-    update_hermes_enabled_plugin(content, false)
+    update_hermes_client_env(&update_hermes_enabled_plugin(content, false), false)
 }
 
-/// Edits supported flat `plugins` and mapped `plugins.enabled` sequences.
+/// The herdr names a shared Hermes gateway (0.22.4+) carries from each CLI
+/// client into its session, so the plugin reports to the client's pane, not
+/// the pane that started the gateway.
+const HERMES_CLIENT_ENV_NAMES: [&str; 6] = [
+    "HERDR_ENV",
+    "HERDR_PANE_ID",
+    "HERDR_TAB_ID",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_SOCKET_PATH",
+    "HERDR_BIN_PATH",
+];
+
+fn update_hermes_client_env(content: &str, enabled: bool) -> String {
+    // Each name is inserted first in the list, so going in reverse keeps this order.
+    HERMES_CLIENT_ENV_NAMES
+        .iter()
+        .rev()
+        .fold(content.to_string(), |content, name| {
+            update_hermes_list_item(
+                &content,
+                "terminal",
+                "client_env_passthrough",
+                name,
+                enabled,
+            )
+        })
+}
+
+pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> String {
+    update_hermes_list_item(
+        content,
+        "plugins",
+        "enabled",
+        HERMES_PLUGIN_INSTALL_NAME,
+        enabled,
+    )
+}
+
+/// Edits supported flat `<owner>` and mapped `<owner>.<child>` sequences.
 /// Unrelated sibling entries and comments are retained, and repeating the same
 /// enable or disable operation leaves the result unchanged.
-pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> String {
+fn update_hermes_list_item(
+    content: &str,
+    owner: &str,
+    child: &str,
+    item: &str,
+    enabled: bool,
+) -> String {
     let trailing_newline = content.ends_with('\n');
     let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
-    let Some(plugins_index) = top_level_yaml_key_index(&lines, "plugins") else {
+    let Some(plugins_index) = top_level_yaml_key_index(&lines, owner) else {
         if !enabled {
             return content.to_string();
         }
@@ -413,7 +458,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
         if !result.is_empty() {
             result.push('\n');
         }
-        result.push_str("plugins:\n  enabled:\n    - herdr-agent-state\n");
+        result.push_str(&format!("{owner}:\n  {child}:\n    - {item}\n"));
         return result;
     };
 
@@ -432,26 +477,31 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
     let enabled_index = (!flat_sequence)
         .then(|| {
             (plugins_index + 1..plugins_end)
-                .find(|&index| yaml_key_at_indent(&lines[index], mapping_indent) == Some("enabled"))
+                .find(|&index| yaml_key_at_indent(&lines[index], mapping_indent) == Some(child))
         })
         .flatten();
-    let plugins_flow = yaml_key_value_at_indent(&lines[plugins_index], 0, "plugins")
+    let plugins_flow = yaml_key_value_at_indent(&lines[plugins_index], 0, owner)
         .and_then(yaml_flow_sequence_items);
+    // A flow mapping or scalar on the owner's line (`terminal: {}`, `null`) cannot
+    // take block children; leave a hand-written owner alone rather than break it.
+    let owner_value = yaml_key_value_at_indent(&lines[plugins_index], 0, owner)
+        .map(yaml_node_content)
+        .unwrap_or_default();
+    if !owner_value.is_empty() && plugins_flow.is_none() {
+        return content.to_string();
+    }
 
     let (key_index, key_indent, key, flow_items) = if let Some(index) = enabled_index {
-        let items = yaml_key_value_at_indent(&lines[index], mapping_indent, "enabled")
+        let items = yaml_key_value_at_indent(&lines[index], mapping_indent, child)
             .and_then(yaml_flow_sequence_items);
-        (index, mapping_indent, "enabled", items)
+        (index, mapping_indent, child, items)
     } else if flat_sequence || plugins_flow.is_some() {
-        (plugins_index, 0, "plugins", plugins_flow)
+        (plugins_index, 0, owner, plugins_flow)
     } else {
         if enabled {
             let indent = " ".repeat(mapping_indent);
-            lines.insert(plugins_index + 1, format!("{indent}enabled:"));
-            lines.insert(
-                plugins_index + 2,
-                format!("{indent}  - {HERMES_PLUGIN_INSTALL_NAME}"),
-            );
+            lines.insert(plugins_index + 1, format!("{indent}{child}:"));
+            lines.insert(plugins_index + 2, format!("{indent}  - {item}"));
             return join_yaml_lines(lines, trailing_newline);
         }
         return content.to_string();
@@ -460,13 +510,11 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
     if let Some(mut items) = flow_items {
         let contains_plugin = items
             .iter()
-            .any(|item| yaml_scalar_value(item) == HERMES_PLUGIN_INSTALL_NAME);
+            .any(|existing| yaml_scalar_value(existing) == item);
         match (enabled, contains_plugin) {
             (true, true) | (false, false) => return content.to_string(),
-            (true, false) => items.insert(0, HERMES_PLUGIN_INSTALL_NAME.to_string()),
-            (false, true) => {
-                items.retain(|item| yaml_scalar_value(item) != HERMES_PLUGIN_INSTALL_NAME)
-            }
+            (true, false) => items.insert(0, item.to_string()),
+            (false, true) => items.retain(|existing| yaml_scalar_value(existing) != item),
         }
         let comment = yaml_inline_comment(&lines[key_index]);
         let header = strip_yaml_inline_comment(&lines[key_index]).trim_end();
@@ -482,12 +530,8 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
         let matches: Vec<_> = sequence
             .items
             .iter()
-            .filter(|item| {
-                yaml_list_item_matches_at_indent(
-                    &lines[(*item).clone()],
-                    sequence.indent,
-                    HERMES_PLUGIN_INSTALL_NAME,
-                )
+            .filter(|range| {
+                yaml_list_item_matches_at_indent(&lines[(*range).clone()], sequence.indent, item)
             })
             .cloned()
             .collect();
@@ -495,10 +539,7 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
             (true, false) | (false, true) => return content.to_string(),
             (true, true) => lines.insert(
                 key_index + 1,
-                format!(
-                    "{}- {HERMES_PLUGIN_INSTALL_NAME}",
-                    " ".repeat(sequence.indent)
-                ),
+                format!("{}- {item}", " ".repeat(sequence.indent)),
             ),
             (false, false) => {
                 // Preserve both node properties and the sequence type, so aliases
@@ -515,8 +556,8 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
                         yaml_inline_comment(&lines[key_index]),
                     );
                 }
-                for item in matches.into_iter().rev() {
-                    for index in item.rev() {
+                for range in matches.into_iter().rev() {
+                    for index in range.rev() {
                         // Remove the indicator and scalar, retaining standalone
                         // comments and blank lines surrounding the matched item.
                         if yaml_indent(&lines[index]).is_some() {

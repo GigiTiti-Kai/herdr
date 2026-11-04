@@ -125,6 +125,7 @@ pub(crate) fn resolved_token_spans(
     max_width: usize,
     join: TokenJoin,
 ) -> Vec<Span<'static>> {
+    let mut has_background_shells = false;
     let join_separator = |previous: &ResolvedToken, current: &ResolvedToken| match join {
         TokenJoin::Separator => tokens::separator(previous, current),
         TokenJoin::Space => " ",
@@ -133,6 +134,10 @@ pub(crate) fn resolved_token_spans(
         .iter()
         .map(|token| match &token.kind {
             ResolvedTokenKind::StateIcon => display_width(state_icon.0),
+            ResolvedTokenKind::BackgroundShells(text) => {
+                has_background_shells = true;
+                display_width(text)
+            }
             ResolvedTokenKind::GitStatus { ahead, behind } => {
                 usize::from(*ahead > 0) * display_width(&format!("↑{ahead}"))
                     + usize::from(*behind > 0) * display_width(&format!("↓{behind}"))
@@ -157,6 +162,28 @@ pub(crate) fn resolved_token_spans(
             _ => 0,
         })
         .collect::<Vec<_>>();
+    let critical_state = if has_background_shells {
+        resolved.iter().enumerate().find_map(|(index, token)| {
+            let ResolvedTokenKind::StateText(text) = &token.kind else {
+                return None;
+            };
+            let (head, suffix) = text
+                .split_once(" · ")
+                .map_or((text.as_str(), false), |(head, _)| (head, true));
+            Some((index, (display_width(head) + usize::from(suffix)).max(1)))
+        })
+    } else {
+        None
+    };
+    let minimum_flexible_width = |index: usize| {
+        if flexible_widths[index] == 0 {
+            0
+        } else {
+            critical_state
+                .filter(|(critical, _)| *critical == index)
+                .map_or(1, |(_, width)| width.min(flexible_widths[index]))
+        }
+    };
     let minimum_width = |active: &[bool]| {
         let indices = active
             .iter()
@@ -165,7 +192,7 @@ pub(crate) fn resolved_token_spans(
             .collect::<Vec<_>>();
         let content = indices
             .iter()
-            .map(|index| fixed_widths[*index] + usize::from(flexible_widths[*index] > 0))
+            .map(|index| fixed_widths[*index] + minimum_flexible_width(*index))
             .sum::<usize>();
         let separators = indices
             .windows(2)
@@ -175,18 +202,29 @@ pub(crate) fn resolved_token_spans(
     };
     let mut active = resolved.iter().map(|_| true).collect::<Vec<_>>();
     if minimum_width(&active) > max_width {
-        for (index, width) in flexible_widths.iter().enumerate() {
-            if *width > 0 {
-                active[index] = false;
+        if let Some((critical, _)) = critical_state {
+            for index in (0..resolved.len()).rev() {
+                if index != critical && flexible_widths[index] > 0 {
+                    active[index] = false;
+                    if minimum_width(&active) <= max_width {
+                        break;
+                    }
+                }
             }
-        }
-        for index in (0..resolved.len()).rev() {
-            if flexible_widths[index] == 0 {
-                continue;
+        } else {
+            for (index, width) in flexible_widths.iter().enumerate() {
+                if *width > 0 {
+                    active[index] = false;
+                }
             }
-            active[index] = true;
-            if minimum_width(&active) > max_width {
-                active[index] = false;
+            for index in (0..resolved.len()).rev() {
+                if flexible_widths[index] == 0 {
+                    continue;
+                }
+                active[index] = true;
+                if minimum_width(&active) > max_width {
+                    active[index] = false;
+                }
             }
         }
     }
@@ -206,8 +244,23 @@ pub(crate) fn resolved_token_spans(
     let mut budgets = flexible_widths
         .iter()
         .enumerate()
-        .map(|(index, width)| usize::from(active[index] && *width > 0))
+        .map(|(index, _)| {
+            if active[index] {
+                minimum_flexible_width(index)
+            } else {
+                0
+            }
+        })
         .collect::<Vec<_>>();
+    if let Some((critical, _)) = critical_state {
+        let other_minimum = budgets
+            .iter()
+            .enumerate()
+            .filter_map(|(index, width)| (index != critical).then_some(*width))
+            .sum::<usize>();
+        budgets[critical] = budgets[critical]
+            .min(max_width.saturating_sub(separator_width + fixed_width + other_minimum));
+    }
     let minimum = budgets.iter().sum::<usize>();
     let mut remaining = max_width
         .saturating_sub(separator_width + fixed_width)
@@ -259,9 +312,32 @@ pub(crate) fn resolved_token_spans(
                 state_icon.0.to_string(),
                 apply_token_style(state_icon.1, token.style),
             )),
-            ResolvedTokenKind::StateText(text) => spans.push(Span::styled(
-                truncate_end(text, budgets[index]),
-                apply_token_style(state_text_style, token.style),
+            ResolvedTokenKind::StateText(text) => {
+                let value = if has_background_shells && display_width(text) > budgets[index] {
+                    text.split_once(" · ")
+                        .filter(|(state, agent)| {
+                            matches!(*state, "working" | "done" | "idle" | "blocked" | "unknown")
+                                && crate::detect::Agent::ALL
+                                    .iter()
+                                    .any(|known| crate::detect::agent_label(*known) == *agent)
+                        })
+                        .map_or(text.as_str(), |(state, _)| state)
+                } else {
+                    text.as_str()
+                };
+                spans.push(Span::styled(
+                    truncate_end(value, budgets[index]),
+                    apply_token_style(state_text_style, token.style),
+                ));
+            }
+            ResolvedTokenKind::BackgroundShells(text) => spans.push(Span::styled(
+                text.clone(),
+                apply_token_style(
+                    Style::default()
+                        .fg(palette.mauve)
+                        .add_modifier(Modifier::BOLD),
+                    token.style,
+                ),
             )),
             ResolvedTokenKind::Workspace(text) => spans.push(Span::styled(
                 truncate_end(text, budgets[index]),

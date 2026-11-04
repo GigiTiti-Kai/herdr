@@ -1484,6 +1484,24 @@ impl AppState {
                 })
                 .into_iter()
                 .collect(),
+            AppEvent::BackgroundShellsObserved {
+                pane_id,
+                agent,
+                background_shells,
+                observed_at,
+            } => {
+                let terminal_id = self.workspaces.iter().find_map(|workspace| {
+                    workspace
+                        .pane_state(pane_id)
+                        .map(|pane| pane.attached_terminal_id.clone())
+                });
+                if let Some(terminal_id) = terminal_id {
+                    if let Some(terminal) = self.terminals.get_mut(&terminal_id) {
+                        terminal.set_background_shells_at(agent, background_shells, observed_at);
+                    }
+                }
+                Vec::new()
+            }
             AppEvent::StateChanged {
                 pane_id,
                 agent,
@@ -3053,6 +3071,63 @@ mod tests {
         let terminal = state.terminals.get(&terminal_id).unwrap();
         assert_eq!(terminal.state, AgentState::Working);
         assert_eq!(terminal.detected_agent, Some(Agent::Pi));
+    }
+
+    #[test]
+    fn background_shell_observations_preserve_response_and_seen_state() {
+        for (response, seen) in [
+            (AgentState::Working, true),
+            (AgentState::Idle, false),
+            (AgentState::Idle, true),
+            (AgentState::Blocked, true),
+        ] {
+            let mut state = app_with_workspaces(&["test"]);
+            let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+            let now = Instant::now();
+            state.handle_app_event(AppEvent::StateChanged {
+                pane_id,
+                agent: Some(Agent::Claude),
+                state: response,
+                visible_blocker: response == AgentState::Blocked,
+                visible_working: response == AgentState::Working,
+                process_exited: false,
+                observed_at: now,
+            });
+            state.workspaces[0].pane_state_mut(pane_id).unwrap().seen = seen;
+            let terminal_id = state.workspaces[0]
+                .pane_state(pane_id)
+                .unwrap()
+                .attached_terminal_id
+                .clone();
+            let sequence = state.next_agent_state_change_seq;
+            let completion = state.terminals[&terminal_id].last_agent_completion_seq;
+            let toast = state.toast.clone();
+
+            let updates = state.handle_app_event(AppEvent::BackgroundShellsObserved {
+                pane_id,
+                agent: Some(Agent::Claude),
+                background_shells: Some(2),
+                observed_at: now + std::time::Duration::from_millis(1),
+            });
+            assert!(
+                updates.is_empty(),
+                "counter metadata is not a lifecycle change"
+            );
+            let terminal = &state.terminals[&terminal_id];
+            assert_eq!(
+                terminal
+                    .agent_tokens()
+                    .get("background_shells")
+                    .map(String::as_str),
+                Some("2 shells")
+            );
+            assert_eq!(terminal.state, response);
+            assert_eq!(terminal.last_agent_completion_seq, completion);
+            assert_eq!(state.next_agent_state_change_seq, sequence);
+            assert_eq!(state.workspaces[0].pane_state(pane_id).unwrap().seen, seen);
+            assert_eq!(state.toast, toast);
+            state.assert_invariants_for_test();
+        }
     }
 
     #[test]

@@ -390,6 +390,21 @@ Agent 行支持以下内置 token：
 - `terminal_title_stripped` — 从终端标题开头移除一个可识别的活动或旋转指示符字形及其后空白后的结果。
 - `$name` — 名为 `name` 的自定义窗格元数据。当窗格的前台进程运行在与其工作区不同的仓库或 linked worktree 中时，Herdr 会自动填充 `$repo` 和 `$worktree`（`wt:<checkout>`）；窗格自行报告的值优先。
 
+`$background_shells` 是由 Herdr 管理的 Agent token，用于显示当前后台 shell 数量。默认自动追加到第一个 `state_text` 行；没有文本状态行时使用第一个 `state_icon` 行，不增加行数。默认紫色与状态颜色独立。数量为零或无法确认时不显示；没有计数不代表所有后台任务均已完成。
+
+在所选布局中显式配置 `$background_shells` 时，以配置的位置为准。单独一行的示例：
+
+```toml
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", "agent"],
+  ["state_text"],
+  [{ token = "$background_shells", fg = "#cba6f7" }],
+]
+```
+
+无法确认计数时，单独的行也会消失。如果 `rows_by_agent` 覆盖了 `rows`，请在该覆盖项中设置相同位置。使用已有 token 规则隐藏显式 token，也会禁用自动显示。
+
 Space 行支持以下内置 token：
 
 - `state_icon` — Space 汇总后智能体状态的彩色图标。

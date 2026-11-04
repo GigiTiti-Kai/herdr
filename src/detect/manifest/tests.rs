@@ -104,6 +104,79 @@ fn known_agent_no_match_defaults_to_idle_fallback() {
 }
 
 #[test]
+fn background_shell_counter_is_independent_of_primary_state() {
+    with_manifest_dirs("background-shell-counter", || {
+        write_local_codex(&rules_manifest(
+            r#"
+[[rules]]
+id = "ready"
+state = "idle"
+priority = 10
+contains = ["ready"]
+
+[[rules]]
+id = "busy"
+state = "working"
+priority = 1000
+contains = ["busy"]
+
+[[rules]]
+id = "approval"
+state = "blocked"
+priority = 2000
+contains = ["approve"]
+
+[[rules]]
+id = "viewer"
+state = "unknown"
+priority = 500
+skip_state_update = true
+contains = ["viewer"]
+
+[[rules]]
+id = "counter"
+state = "idle"
+region = "bottom_non_empty_lines(1)"
+line_regex = ['^counter=(?P<background_shells>\d+)$']
+"#,
+        ));
+
+        for (screen, state, count) in [
+            ("ready\ncounter=1", AgentState::Idle, Some(1)),
+            ("busy\ncounter=2", AgentState::Working, Some(2)),
+            ("approve\ncounter=10", AgentState::Blocked, Some(10)),
+            ("ready\ncounter=0", AgentState::Idle, None),
+            ("counter=2\nready", AgentState::Idle, None),
+            ("ready\ncounter=4294967296", AgentState::Idle, None),
+            ("viewer\ncounter=2", AgentState::Unknown, None),
+            ("busy\nviewer\ncounter=2", AgentState::Working, None),
+        ] {
+            let result = explain(Agent::Codex, screen);
+            assert_eq!(result.state, state, "{screen}");
+            let json = explain_to_json_value(&result);
+            assert_eq!(
+                json.get("background_shells")
+                    .and_then(serde_json::Value::as_u64),
+                count,
+                "{screen}"
+            );
+            assert_eq!(
+                background_shells_with_input(
+                    Agent::Codex,
+                    DetectionInput {
+                        screen,
+                        osc_title: "",
+                        osc_progress: ""
+                    },
+                ),
+                count.map(|value| value as u32),
+                "auxiliary-only observer: {screen}",
+            );
+        }
+    });
+}
+
+#[test]
 fn rule_semantics_apply_gates_priority_and_line_regex() {
     with_manifest_dirs("rule-semantics", || {
         write_local_codex(&rules_manifest(
@@ -370,7 +443,6 @@ fn fork_build_keeps_bundled_manifest_over_newer_cached_remote() {
 #[test]
 fn bundled_manifests_keep_fork_only_rules() {
     for (agent, rule_id) in [
-        (Agent::Claude, "background_shells_working"),
         (Agent::Claude, "background_agents_working"),
         (Agent::Hermes, "background_subagents_working"),
         (Agent::Codex, "trust_directory"),
@@ -984,45 +1056,6 @@ fn osc_explain(
 }
 
 // --- Claude OSC rules ---
-
-#[test]
-fn claude_idle_prompt_with_background_shell_is_working() {
-    // Captured from Claude Code 2.1.251 after its foreground turn ended while
-    // a long-lived background shell remained active (issue #3414).
-    let screen = concat!(
-        "✻ Sautéed for 10s · 1 shell still running\n\n",
-        "──────────────────────────────────────────────────────── WINDOWS ─\n",
-        "❯\n",
-        "────────────────────────────────────────────────────────────────\n",
-        "  ⏵⏵ auto mode on · 1 shell · ← for agents                     /rc\n",
-    );
-    let result = osc_explain(Agent::Claude, screen, "", "");
-
-    assert_eq!(result.state, AgentState::Working);
-    assert_eq!(
-        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-        Some("background_shells_working")
-    );
-    assert!(!result.visible_idle);
-    assert!(result.visible_working);
-}
-
-#[test]
-fn claude_background_shell_without_foreground_evidence_is_working() {
-    let result = osc_explain(
-        Agent::Claude,
-        "  ⏵⏵ auto mode on · 1 shell · ← for agents\n",
-        "",
-        "",
-    );
-
-    assert_eq!(result.state, AgentState::Working);
-    assert_eq!(
-        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-        Some("background_shells_working")
-    );
-    assert!(result.visible_working);
-}
 
 #[test]
 fn claude_background_shell_counter_ignores_zero_history_and_prompt_text() {

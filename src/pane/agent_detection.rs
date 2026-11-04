@@ -349,6 +349,7 @@ pub(super) fn detection_update_for_publish_with_osc(
     if process_exited {
         return Some(crate::detect::AgentDetection {
             state: AgentState::Idle,
+            background_shells: None,
             skip_state_update: false,
             visible_idle: true,
             visible_blocker: false,
@@ -460,6 +461,7 @@ mod tests {
     fn screen_detection(state: AgentState) -> AgentDetection {
         AgentDetection {
             state,
+            background_shells: None,
             skip_state_update: false,
             visible_idle: state == AgentState::Idle,
             visible_blocker: false,

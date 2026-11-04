@@ -322,6 +322,44 @@ async fn publish_agent_process_detected_event(
     }
 }
 
+fn background_shells_from_current_process(
+    count: Option<u32>,
+    content_seq: u64,
+    replaced_content_seq: Option<u64>,
+) -> Option<u32> {
+    count.filter(|_| content_seq.is_multiple_of(2) && replaced_content_seq != Some(content_seq))
+}
+
+async fn publish_background_shell_observation(
+    state_events: &mpsc::Sender<AppEvent>,
+    pane_id: PaneId,
+    agent: Option<Agent>,
+    background_shells: Option<u32>,
+    observed_at: std::time::Instant,
+    last: &mut Option<(Option<Agent>, Option<u32>)>,
+) {
+    let background_shells = background_shells.filter(|count| *count > 0);
+    let next = (agent, background_shells);
+    if *last == Some(next)
+        || (background_shells.is_none() && last.is_some_and(|(_, previous)| previous.is_none()))
+    {
+        *last = Some(next);
+        return;
+    }
+    match state_events
+        .send(AppEvent::BackgroundShellsObserved {
+            pane_id,
+            agent,
+            background_shells,
+            observed_at,
+        })
+        .await
+    {
+        Ok(()) => *last = Some(next),
+        Err(err) => warn!(pane = pane_id.raw(), %err, "failed to deliver shell observation"),
+    }
+}
+
 async fn publish_codex_prompt_observation(
     state_events: &mpsc::Sender<AppEvent>,
     pane_id: PaneId,
@@ -1055,6 +1093,8 @@ fn spawn_basic_detection_task(
         let mut agent_startup_grace_until = None;
         let mut pending_idle = PendingIdleConfirmation::default();
         let mut last_codex_prompt_ready = false;
+        let mut last_background_shells = Some((None, None));
+        let mut replaced_shell_content_seq = None;
         let mut last_self_reported_shell_check = None;
         let mut agent_job = AgentJobTracker::default();
 
@@ -1086,6 +1126,7 @@ fn spawn_basic_detection_task(
                     foreground_shell_exit_reported = false;
                     release_was_active = false;
                     last_detection_text.clear();
+                    last_background_shells = None;
                     last_screen_scan_detection_content_seq = None;
                     agent_startup_grace_until = None;
                     pending_idle.clear();
@@ -1196,6 +1237,9 @@ fn spawn_basic_detection_task(
                         // from the previous process; a first acquisition keeps
                         // the evidence its own process already emitted.
                         clear_osc_evidence_for_agent_transition(&terminal, previous_agent);
+                        if previous_agent.is_some() {
+                            replaced_shell_content_seq = Some(content_seq.load(Ordering::Acquire));
+                        }
                         if let Some(agent) = agent {
                             agent_startup_grace_until = Some(now + AGENT_STARTUP_GRACE_WINDOW);
                             state = AgentState::Unknown;
@@ -1223,7 +1267,68 @@ fn spawn_basic_detection_task(
 
             // The visible screen belongs to another job while the agent waits
             // in the background, so it says nothing about the agent's state.
-            if (lifecycle_authority_active || agent_job.in_background()) && !process_exited {
+            if (agent_changed || process_exited)
+                && last_background_shells.is_some_and(|(_, count)| count.is_some())
+            {
+                last_background_shells = None;
+            }
+            if agent_job.in_background() && !process_exited {
+                publish_background_shell_observation(
+                    &state_events,
+                    pane_id,
+                    agent,
+                    None,
+                    now,
+                    &mut last_background_shells,
+                )
+                .await;
+                pending_idle.clear();
+                continue;
+            }
+            if lifecycle_authority_active && !process_exited {
+                let current_seq = Some(detection_content_seq.load(Ordering::Relaxed));
+                if agent.is_some_and(crate::detect::manifest::has_background_shell_counter)
+                    && last_screen_scan_detection_content_seq != current_seq
+                {
+                    last_detection_text
+                        .refresh(agent, &content_seq, || terminal.detection_text_for_cache());
+                    last_screen_scan_detection_content_seq = current_seq;
+                    let count = agent.and_then(|agent| {
+                        crate::detect::manifest::background_shells_with_input(
+                            agent,
+                            crate::detect::manifest::DetectionInput {
+                                screen: &last_detection_text.text,
+                                osc_title: &terminal.agent_osc_title(),
+                                osc_progress: &terminal.agent_osc_progress(),
+                            },
+                        )
+                    });
+                    let count = background_shells_from_current_process(
+                        count,
+                        content_seq.load(Ordering::Acquire),
+                        replaced_shell_content_seq,
+                    );
+                    publish_background_shell_observation(
+                        &state_events,
+                        pane_id,
+                        agent,
+                        count,
+                        now,
+                        &mut last_background_shells,
+                    )
+                    .await;
+                } else if !agent.is_some_and(crate::detect::manifest::has_background_shell_counter)
+                {
+                    publish_background_shell_observation(
+                        &state_events,
+                        pane_id,
+                        agent,
+                        None,
+                        now,
+                        &mut last_background_shells,
+                    )
+                    .await;
+                }
                 pending_idle.clear();
                 continue;
             }
@@ -1286,6 +1391,15 @@ fn spawn_basic_detection_task(
             )
             .await;
             let Some(screen_detection) = screen_detection else {
+                publish_background_shell_observation(
+                    &state_events,
+                    pane_id,
+                    agent,
+                    None,
+                    now,
+                    &mut last_background_shells,
+                )
+                .await;
                 pending_idle.clear();
                 continue;
             };
@@ -1342,6 +1456,19 @@ fn spawn_basic_detection_task(
                     .await;
                 }
             }
+            publish_background_shell_observation(
+                &state_events,
+                pane_id,
+                if process_exited { None } else { agent },
+                background_shells_from_current_process(
+                    screen_detection.background_shells,
+                    content_seq.load(Ordering::Acquire),
+                    replaced_shell_content_seq,
+                ),
+                now,
+                &mut last_background_shells,
+            )
+            .await;
         }
     });
 
@@ -2990,6 +3117,8 @@ impl PaneRuntime {
                 let mut agent_startup_grace_until = None;
                 let mut pending_idle = PendingIdleConfirmation::default();
                 let mut last_codex_prompt_ready = false;
+                let mut last_background_shells = Some((None, None));
+                let mut replaced_shell_content_seq = None;
                 let mut last_self_reported_shell_check = None;
                 let mut agent_job = AgentJobTracker::default();
 
@@ -3031,6 +3160,7 @@ impl PaneRuntime {
                             last_visible_working = false;
                             last_visible_signal_refresh = None;
                             last_detection_text.clear();
+                            last_background_shells = None;
                             last_screen_scan_detection_content_seq = None;
                             agent_startup_grace_until = None;
                             pending_idle.clear();
@@ -3181,6 +3311,10 @@ impl PaneRuntime {
                                         &terminal,
                                         previous_agent,
                                     );
+                                    if previous_agent.is_some() {
+                                        replaced_shell_content_seq =
+                                            Some(text_content_seq.load(Ordering::Acquire));
+                                    }
                                     if let Some(agent) = agent {
                                         agent_startup_grace_until =
                                             Some(now + AGENT_STARTUP_GRACE_WINDOW);
@@ -3238,8 +3372,70 @@ impl PaneRuntime {
 
                     // The visible screen belongs to another job while the agent
                     // waits in the background, so it says nothing about its state.
-                    if (lifecycle_authority_active || agent_job.in_background()) && !process_exited
+                    if (agent_changed || process_exited)
+                        && last_background_shells.is_some_and(|(_, count)| count.is_some())
                     {
+                        last_background_shells = None;
+                    }
+                    if agent_job.in_background() && !process_exited {
+                        publish_background_shell_observation(
+                            &state_events,
+                            pane_id,
+                            agent,
+                            None,
+                            now,
+                            &mut last_background_shells,
+                        )
+                        .await;
+                        pending_idle.clear();
+                        continue;
+                    }
+                    if lifecycle_authority_active && !process_exited {
+                        let current_seq = Some(detection_content_seq.load(Ordering::Relaxed));
+                        if agent.is_some_and(crate::detect::manifest::has_background_shell_counter)
+                            && last_screen_scan_detection_content_seq != current_seq
+                        {
+                            last_detection_text.refresh(agent, &text_content_seq, || {
+                                terminal.detection_text_for_cache()
+                            });
+                            last_screen_scan_detection_content_seq = current_seq;
+                            let count = agent.and_then(|agent| {
+                                crate::detect::manifest::background_shells_with_input(
+                                    agent,
+                                    crate::detect::manifest::DetectionInput {
+                                        screen: &last_detection_text.text,
+                                        osc_title: &terminal.agent_osc_title(),
+                                        osc_progress: &terminal.agent_osc_progress(),
+                                    },
+                                )
+                            });
+                            let count = background_shells_from_current_process(
+                                count,
+                                text_content_seq.load(Ordering::Acquire),
+                                replaced_shell_content_seq,
+                            );
+                            publish_background_shell_observation(
+                                &state_events,
+                                pane_id,
+                                agent,
+                                count,
+                                now,
+                                &mut last_background_shells,
+                            )
+                            .await;
+                        } else if !agent
+                            .is_some_and(crate::detect::manifest::has_background_shell_counter)
+                        {
+                            publish_background_shell_observation(
+                                &state_events,
+                                pane_id,
+                                agent,
+                                None,
+                                now,
+                                &mut last_background_shells,
+                            )
+                            .await;
+                        }
                         pending_idle.clear();
                         continue;
                     }
@@ -3304,6 +3500,15 @@ impl PaneRuntime {
                     )
                     .await;
                     let Some(screen_detection) = screen_detection else {
+                        publish_background_shell_observation(
+                            &state_events,
+                            pane_id,
+                            agent,
+                            None,
+                            now,
+                            &mut last_background_shells,
+                        )
+                        .await;
                         pending_idle.clear();
                         continue;
                     };
@@ -3360,6 +3565,19 @@ impl PaneRuntime {
                             .await;
                         }
                     }
+                    publish_background_shell_observation(
+                        &state_events,
+                        pane_id,
+                        if process_exited { None } else { agent },
+                        background_shells_from_current_process(
+                            screen_detection.background_shells,
+                            text_content_seq.load(Ordering::Acquire),
+                            replaced_shell_content_seq,
+                        ),
+                        now,
+                        &mut last_background_shells,
+                    )
+                    .await;
                 }
             });
             (
@@ -6918,12 +7136,86 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn background_shell_replacement_rejects_retained_screen_but_keeps_handoff_evidence() {
+        assert_eq!(
+            background_shells_from_current_process(Some(2), 42, None),
+            Some(2)
+        );
+        assert_eq!(
+            background_shells_from_current_process(Some(2), 42, Some(42)),
+            None
+        );
+        assert_eq!(
+            background_shells_from_current_process(Some(1), 44, Some(42)),
+            Some(1)
+        );
+        assert_eq!(
+            background_shells_from_current_process(Some(1), 43, Some(42)),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn background_shell_observation_does_not_publish_absence_for_a_new_agent() {
+        let (tx, mut rx) = mpsc::channel(2);
+        let mut last = Some((None, None));
+        publish_background_shell_observation(
+            &tx,
+            PaneId::from_raw(42),
+            Some(Agent::Claude),
+            None,
+            std::time::Instant::now(),
+            &mut last,
+        )
+        .await;
+        assert!(
+            rx.try_recv().is_err(),
+            "absence alone must not wake presentation"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_shell_observation_publishes_only_counter_changes() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let pane_id = PaneId::from_raw(42);
+        let mut last = None;
+        for count in [Some(1), Some(1), Some(2), Some(1), None, Some(0)] {
+            publish_background_shell_observation(
+                &tx,
+                pane_id,
+                Some(Agent::Claude),
+                count,
+                std::time::Instant::now(),
+                &mut last,
+            )
+            .await;
+        }
+        let received = std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|event| match event {
+                AppEvent::BackgroundShellsObserved {
+                    pane_id: observed_pane,
+                    agent,
+                    background_shells,
+                    ..
+                } => {
+                    assert_eq!(observed_pane, pane_id);
+                    assert_eq!(agent, Some(Agent::Claude));
+                    background_shells
+                }
+                event => panic!("unexpected event: {event:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(received, vec![Some(1), Some(2), Some(1), None]);
+    }
+
     #[tokio::test]
     async fn codex_prompt_observation_revokes_on_working_or_skipped_screen() {
         let (tx, mut rx) = mpsc::channel(4);
         let pane_id = PaneId::from_raw(42);
         let detection = crate::detect::AgentDetection {
             state: AgentState::Unknown,
+            background_shells: None,
             skip_state_update: false,
             visible_idle: false,
             visible_blocker: false,

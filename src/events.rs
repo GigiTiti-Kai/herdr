@@ -91,6 +91,13 @@ pub enum AppEvent {
     },
     /// The current Codex input screen is visible during managed startup.
     CodexPromptObserved { pane_id: PaneId, ready: bool },
+    /// An auxiliary live counter changed without changing agent lifecycle state.
+    BackgroundShellsObserved {
+        pane_id: PaneId,
+        agent: Option<Agent>,
+        background_shells: Option<u32>,
+        observed_at: Instant,
+    },
     /// Fallback detector state changed in a pane.
     StateChanged {
         pane_id: PaneId,

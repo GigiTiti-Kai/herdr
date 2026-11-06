@@ -1085,6 +1085,12 @@
           "description": "Plugin action run when the visible Agent panel footer is clicked, written like the command of a plugin_action key binding (for example \"example.usage.refresh\"). It runs on the selected machine; the sidebar collapse toggle keeps its own click. The footer briefly shows in reverse video on a click. Unset or blank leaves the footer unclickable."
         },
         {
+          "key": "ui.sidebar.agents.pinned",
+          "type": "string[]",
+          "default": "[]",
+          "description": "Agent names, as in the name field of herdr agent list, held under the agents heading of the single-machine expanded sidebar while the rest of the list scrolls. Listed names come first, in this order, in the agent panel and in agent navigation; collapsed and mobile lists change order only. The expanded multi-machine list ignores this setting, and agent navigation follows its order. On a panel too short for the pinned rows, a separator, and two list rows, they join the scrolling list instead."
+        },
+        {
           "key": "ui.sidebar.agents.row_gap",
           "type": "integer",
           "default": "0",

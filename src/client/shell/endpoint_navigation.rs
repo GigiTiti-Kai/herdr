@@ -167,10 +167,17 @@ impl ClientShellState {
             action,
             KeybindAction::PreviousAgent | KeybindAction::NextAgent | KeybindAction::FocusAgent(_)
         ) {
+            // Keys follow the drawn list, and the expanded one ignores `pinned`.
+            let pinned: &[String] = if self.sidebar_collapsed || self.mobile_layout_active() {
+                &self.config.agents.pinned
+            } else {
+                &[]
+            };
             let agents = super::aggregate_navigation::online_agent_targets(
                 &self.endpoints,
                 &self.active_endpoint_id,
                 self.config.agent_panel_sort,
+                pinned,
             );
             if agents.is_empty() {
                 return true;

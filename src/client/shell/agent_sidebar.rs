@@ -14,6 +14,7 @@ pub(super) struct AgentRow {
     pub(super) pane_id: String,
     pub(super) status: crate::api::schema::AgentStatus,
     pub(super) focused: bool,
+    pub(super) pinned: bool,
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
     /// One entry per configured footer row (empty when this agent resolves none).
     pub(super) footer: Vec<Vec<crate::ui::ResolvedToken>>,
@@ -22,33 +23,42 @@ pub(super) struct AgentRow {
 pub(super) fn ordered_agent_pane_ids(
     snapshot: &ClientShellSnapshot,
     sort: crate::config::AgentPanelSortConfig,
+    pinned: &[String],
 ) -> Vec<String> {
-    if snapshot.agent_view_label.is_some() {
-        return snapshot
+    let mut agents = if snapshot.agent_view_label.is_some() {
+        snapshot
             .agent_order
             .iter()
-            .filter(|pane_id| {
+            .filter_map(|pane_id| {
                 snapshot
                     .agents
                     .iter()
-                    .any(|agent| agent.pane_id == pane_id.as_str())
+                    .find(|agent| agent.pane_id == pane_id.as_str())
             })
-            .cloned()
-            .collect();
-    }
-    let mut agents = snapshot.agents.iter().collect::<Vec<_>>();
-    if sort == crate::config::AgentPanelSortConfig::Priority {
-        agents.sort_by_key(|agent| {
-            (
-                std::cmp::Reverse(status_priority(agent.agent_status)),
-                std::cmp::Reverse(agent.state_change_seq),
-            )
-        });
-    }
+            .collect::<Vec<_>>()
+    } else {
+        let mut agents = snapshot.agents.iter().collect::<Vec<_>>();
+        if sort == crate::config::AgentPanelSortConfig::Priority {
+            agents.sort_by_key(|agent| {
+                (
+                    std::cmp::Reverse(status_priority(agent.agent_status)),
+                    std::cmp::Reverse(agent.state_change_seq),
+                )
+            });
+        }
+        agents
+    };
+    agents.sort_by_key(|agent| pinned_rank(agent.name.as_deref(), pinned));
     agents
         .into_iter()
         .map(|agent| agent.pane_id.clone())
         .collect()
+}
+
+/// Stable-sort key: pinned names first in config order, everyone else tied after them.
+pub(super) fn pinned_rank(name: Option<&str>, pinned: &[String]) -> usize {
+    name.and_then(|name| pinned.iter().position(|entry| entry == name))
+        .unwrap_or(pinned.len())
 }
 
 pub(super) fn render_agent_panel(
@@ -78,14 +88,33 @@ pub(super) fn render_agent_panel(
             .iter()
             .map(|workspace| workspace.tokens.as_slice()),
     );
+    let pinned = rows.iter().take_while(|row| row.pinned).count();
+    let pinned_height = rows[..pinned]
+        .iter()
+        .map(|row| row.rows.len().max(1))
+        .sum::<usize>()
+        + pinned.saturating_sub(1) * usize::from(config.agents.row_gap);
+    let fits = pinned_height + 1 + usize::from(MIN_AGENT_LIST_ROWS)
+        <= usize::from(area.height.saturating_sub(AGENT_LIST_TOP));
+    let (fixed, listed) = rows.split_at(if fits { pinned } else { 0 });
+    let mut list_area = area;
+    if !fixed.is_empty() {
+        render_pinned_agents(buffer, area, fixed, config, hits);
+        // render_agent_list adds its own header offset, so this lands under the separator.
+        let shift = pinned_height as u16 + 1;
+        list_area.y += shift;
+        list_area.height -= shift;
+    }
+    hits.agent_pinned_rows = fixed.len();
     render_agent_list(
         buffer,
-        area,
-        &rows,
+        list_area,
+        listed,
         &footer,
         snapshot
             .agent_view_label
             .as_ref()
+            .filter(|_| fixed.is_empty())
             .map(|_| " no matching agents"),
         config,
         agent_scroll,
@@ -95,6 +124,33 @@ pub(super) fn render_agent_panel(
             hits.agents.push((rect, row.pane_id.clone()));
             render_agent_row(buffer, rect, row, config);
         },
+    );
+}
+
+fn render_pinned_agents(
+    buffer: &mut Buffer,
+    area: Rect,
+    rows: &[AgentRow],
+    config: &ClientShellConfig,
+    hits: &mut ShellHitMap,
+) {
+    let mut y = area.y + AGENT_LIST_TOP;
+    for (index, row) in rows.iter().enumerate() {
+        if index > 0 {
+            y += config.agents.row_gap;
+        }
+        let rect = Rect::new(area.x, y, area.width, row.rows.len().max(1) as u16);
+        hits.agents.push((rect, row.pane_id.clone()));
+        render_agent_row(buffer, rect, row, config);
+        y = rect.bottom();
+    }
+    put_text(
+        buffer,
+        area.x,
+        y,
+        area.width,
+        &"─".repeat(area.width as usize),
+        Style::default().fg(config.palette.surface_dim),
     );
 }
 
@@ -176,9 +232,9 @@ pub(super) fn render_agent_list<T>(
 ) {
     let list = Rect::new(
         area.x,
-        area.y.saturating_add(3),
+        area.y.saturating_add(AGENT_LIST_TOP),
         area.width,
-        area.height.saturating_sub(3),
+        area.height.saturating_sub(AGENT_LIST_TOP),
     );
     // The list keeps MIN_AGENT_LIST_ROWS; footer rows beyond that are dropped
     // from the top so the bottom (account) rows survive.
@@ -273,6 +329,8 @@ pub(super) fn render_agent_list<T>(
 }
 
 const MIN_AGENT_LIST_ROWS: u16 = 2;
+/// Panel rows above the list: top rule, `agents` heading, blank line.
+const AGENT_LIST_TOP: u16 = 3;
 
 fn render_agent_footer(
     buffer: &mut Buffer,
@@ -308,7 +366,7 @@ pub(super) fn agent_rows(
     config: &ClientShellConfig,
     machine: Option<&str>,
 ) -> Vec<AgentRow> {
-    ordered_agent_pane_ids(snapshot, config.agent_panel_sort)
+    ordered_agent_pane_ids(snapshot, config.agent_panel_sort, &config.agents.pinned)
         .into_iter()
         .filter_map(|pane_id| agent_row(snapshot, &pane_id, config, machine))
         .collect()
@@ -382,6 +440,8 @@ pub(super) fn agent_row(
         pane_id: agent.pane_id.clone(),
         status: agent.agent_status,
         focused: agent.focused,
+        pinned: pinned_rank(agent.name.as_deref(), &config.agents.pinned)
+            < config.agents.pinned.len(),
         rows,
         footer,
     })
@@ -519,6 +579,7 @@ mod tests {
             pane_id: "pane_1".into(),
             status,
             focused: true,
+            pinned: false,
             rows,
             footer: Vec::new(),
         };

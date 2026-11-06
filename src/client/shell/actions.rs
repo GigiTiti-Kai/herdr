@@ -929,6 +929,7 @@ impl ClientShellState {
                 let agents = super::agent_sidebar::ordered_agent_pane_ids(
                     snapshot,
                     self.config.agent_panel_sort,
+                    &self.config.agents.pinned,
                 );
                 Some(Method::PaneFocus(PaneTarget {
                     pane_id: agents.get(index)?.clone(),
@@ -938,6 +939,7 @@ impl ClientShellState {
                 let agents = super::agent_sidebar::ordered_agent_pane_ids(
                     snapshot,
                     self.config.agent_panel_sort,
+                    &self.config.agents.pinned,
                 );
                 if agents.is_empty() {
                     return None;
@@ -961,7 +963,9 @@ impl ClientShellState {
                     .iter()
                     .any(|(_, visible_pane_id)| visible_pane_id == &pane_id)
                 {
-                    self.agent_scroll = next.min(self.hits.agent_max_scroll);
+                    self.agent_scroll = next
+                        .saturating_sub(self.hits.agent_pinned_rows)
+                        .min(self.hits.agent_max_scroll);
                 }
                 Some(Method::PaneFocus(PaneTarget { pane_id }))
             }

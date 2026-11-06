@@ -28,6 +28,7 @@ pub struct DetectionInput<'a> {
 pub struct DetectionExplain {
     pub agent: Option<String>,
     pub state: AgentState,
+    pub background_shells: Option<u32>,
     pub source: Option<ManifestSource>,
     pub matched_rule: Option<MatchedRule>,
     pub screen_detection_skipped: bool,
@@ -201,6 +202,7 @@ struct ManifestGate {
 #[derive(Debug, Clone)]
 struct CompiledRule {
     gate: CompiledGate,
+    background_shells: Vec<(Regex, bool)>,
 }
 
 #[derive(Debug, Clone)]
@@ -372,6 +374,60 @@ pub fn detect_with_osc(agent: Agent, input: DetectionInput<'_>) -> AgentDetectio
     evaluate_loaded_manifest(agent, input, loaded, false).into_detection()
 }
 
+pub(crate) fn has_background_shell_counter(agent: Agent) -> bool {
+    let guard = match manifest_cache().read() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.manifests.iter().any(|(candidate, loaded)| {
+        *candidate == agent
+            && loaded.as_ref().is_some_and(|loaded| {
+                loaded
+                    .compiled_rules
+                    .iter()
+                    .any(|rule| !rule.background_shells.is_empty())
+            })
+    })
+}
+
+/// Read auxiliary evidence without evaluating or allocating primary-state diagnostics.
+pub(crate) fn background_shells_with_input(agent: Agent, input: DetectionInput<'_>) -> Option<u32> {
+    let guard = match manifest_cache().read() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let loaded = guard
+        .manifests
+        .iter()
+        .find(|(candidate, _)| *candidate == agent)?
+        .1
+        .as_ref()?;
+    let mut count: Option<(i32, u32)> = None;
+    for (rule, compiled) in loaded
+        .manifest
+        .rules
+        .iter()
+        .zip(loaded.compiled_rules.iter())
+    {
+        if compiled.background_shells.is_empty() && !rule.skip_state_update {
+            continue;
+        }
+        let text = region(input, &rule.region);
+        if !compiled_rule_matches(compiled, text) {
+            continue;
+        }
+        if rule.skip_state_update {
+            return None;
+        }
+        if let Some(value) = captured_background_shells(compiled, text) {
+            if count.is_none_or(|(priority, _)| rule.priority > priority) {
+                count = Some((rule.priority, value));
+            }
+        }
+    }
+    count.map(|(_, value)| value)
+}
+
 pub fn explain(agent: Agent, screen_content: &str) -> DetectionExplain {
     explain_with_input(
         agent,
@@ -395,6 +451,7 @@ pub fn explain_for_label(agent_label: &str, screen_content: &str) -> DetectionEx
         return DetectionExplain {
             agent: Some(agent_label.to_string()),
             state: AgentState::Unknown,
+            background_shells: None,
             source: None,
             matched_rule: None,
             screen_detection_skipped: false,
@@ -420,6 +477,7 @@ impl DetectionExplain {
     fn into_detection(self) -> AgentDetection {
         AgentDetection {
             state: self.state,
+            background_shells: self.background_shells,
             skip_state_update: self.skip_state_update,
             visible_idle: self.visible_idle,
             visible_blocker: self.visible_blocker,
@@ -435,6 +493,8 @@ fn evaluate_loaded_manifest(
     include_update_status: bool,
 ) -> DetectionExplain {
     let mut matched: Option<(&ManifestRule, String)> = None;
+    let mut background_shells: Option<(i32, u32)> = None;
+    let mut background_shells_hidden = false;
     let mut evaluated_rules = Vec::new();
 
     for (rule, compiled_rule) in loaded
@@ -459,6 +519,13 @@ fn evaluate_loaded_manifest(
 
         if !matched_rule {
             continue;
+        }
+        background_shells_hidden |= rule.skip_state_update;
+
+        if let Some(count) = captured_background_shells(compiled_rule, region_text) {
+            if background_shells.is_none_or(|(priority, _)| rule.priority > priority) {
+                background_shells = Some((rule.priority, count));
+            }
         }
 
         match matched {
@@ -490,6 +557,11 @@ fn evaluate_loaded_manifest(
     DetectionExplain {
         agent: Some(agent_label(agent).to_string()),
         state,
+        background_shells: if background_shells_hidden {
+            None
+        } else {
+            background_shells.map(|(_, count)| count)
+        },
         source: Some(loaded.source),
         matched_rule: Some(MatchedRule {
             id: rule.id.clone(),
@@ -552,6 +624,7 @@ fn fallback_explain(
         } else {
             AgentState::Unknown
         },
+        background_shells: None,
         source,
         matched_rule: None,
         screen_detection_skipped: false,
@@ -891,6 +964,7 @@ pub fn explain_to_json_value(explain: &DetectionExplain) -> serde_json::Value {
         "visible_idle": explain.visible_idle,
         "visible_blocker": explain.visible_blocker,
         "visible_working": explain.visible_working,
+        "background_shells": explain.background_shells,
         "screen_detection_skipped": explain.screen_detection_skipped,
         "skip_state_update": explain.skip_state_update,
         "skipped_update_reason": explain.skipped_update_reason,
@@ -1183,10 +1257,48 @@ fn compile_manifest(manifest: &AgentManifest) -> Result<Vec<CompiledRule>, Strin
         .iter()
         .map(|rule| {
             compile_gate(&manifest_gate_from_rule(rule))
-                .map(|gate| CompiledRule { gate })
+                .map(|gate| {
+                    let background_shells = gate
+                        .regex
+                        .iter()
+                        .map(|regex| (regex, false))
+                        .chain(gate.line_regex.iter().map(|regex| (regex, true)))
+                        .filter(|(regex, _)| {
+                            regex
+                                .capture_names()
+                                .any(|name| name == Some("background_shells"))
+                        })
+                        .map(|(regex, line_based)| (regex.clone(), line_based))
+                        .collect();
+                    CompiledRule {
+                        gate,
+                        background_shells,
+                    }
+                })
                 .map_err(|err| format!("rule {} could not be compiled: {err}", rule.id))
         })
         .collect()
+}
+
+fn captured_background_shells(rule: &CompiledRule, text: &str) -> Option<u32> {
+    rule.background_shells
+        .iter()
+        .find_map(|(regex, line_based)| {
+            let capture = |text: &str| {
+                regex
+                    .captures(text)?
+                    .name("background_shells")?
+                    .as_str()
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|count| *count > 0)
+            };
+            if *line_based {
+                text.lines().find_map(capture)
+            } else {
+                capture(text)
+            }
+        })
 }
 
 fn compile_gate(gate: &ManifestGate) -> Result<CompiledGate, String> {

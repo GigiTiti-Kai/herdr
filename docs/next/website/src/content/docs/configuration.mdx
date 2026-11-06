@@ -426,6 +426,21 @@ Agent rows accept these built-in tokens:
 - `terminal_title_stripped` — the terminal title with one recognized leading activity or spinner glyph and its following whitespace removed.
 - `$name` — custom pane metadata named `name`. Herdr fills `$repo` and `$worktree` itself when the pane's foreground process runs in a different repository or linked worktree than its workspace (`wt:<checkout>`); a value reported by the pane wins.
 
+`$background_shells` is a runtime-owned Agent token for current background shells. It appears automatically in the first `state_text` row, or the first `state_icon` row if there is no text state row, without adding a row. Its default mauve color is independent of the state color. Zero or unavailable counts are hidden; absence does not prove that every background job has finished.
+
+An explicit `$background_shells` token in the selected layout takes priority over automatic placement. For a separate line, configure:
+
+```toml
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", "agent"],
+  ["state_text"],
+  [{ token = "$background_shells", fg = "#cba6f7" }],
+]
+```
+
+The separate row disappears when the counter is unavailable. Apply the same placement to an existing `rows_by_agent` override if that override replaces `rows`. Existing token rules can hide the explicit token to disable automatic display.
+
 Space rows accept these built-in tokens:
 
 - `state_icon` — colored icon for the space's rolled-up agent state.

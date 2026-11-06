@@ -65,7 +65,7 @@ For agents Herdr supports, Herdr finds the agent's process in each pane and read
 
 For agents that support Herdr, the agent's own reports decide the state.
 
-Claude Code stays `working` while its footer shows one or more background shells, including long-running services. When the count disappears, its prompt can return the pane to `idle`; recognized permission dialogs remain `blocked`.
+Claude Code's response state is independent of its background shells. When its foreground turn finishes, it can be `idle` or `done` while a long-running service remains active. Herdr shows the current footer count separately as `1 shell` or `2 shells`, in mauve beside the state. Foreground work still shows `working` and recognized permission dialogs remain `blocked`. Shell-count changes alone do not create another completion notification.
 
 ## VMs and sandbox wrappers
 

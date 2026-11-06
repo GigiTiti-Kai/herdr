@@ -23,6 +23,8 @@ pub enum AgentState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentDetection {
     pub state: AgentState,
+    /// Positive live background-shell count, independent of the response state.
+    pub background_shells: Option<u32>,
     /// True when the current screen is an agent-owned viewer that shows
     /// transcript/history instead of the live prompt state.
     pub skip_state_update: bool,
@@ -318,6 +320,7 @@ pub fn detect_agent_with_osc(
     let Some(agent) = agent else {
         return AgentDetection {
             state: AgentState::Unknown,
+            background_shells: None,
             skip_state_update: false,
             visible_idle: false,
             visible_blocker: false,

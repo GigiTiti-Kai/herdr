@@ -14,6 +14,9 @@ use crate::terminal::TerminalId;
 mod metadata;
 pub use metadata::{AgentMetadata, AgentMetadataReport, EffectivePresentation};
 
+#[path = "background_shells.rs"]
+mod background_shells;
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HookAuthority {
     pub source: String,
@@ -136,6 +139,8 @@ pub struct TerminalState {
     pub hook_authority: Option<HookAuthority>,
     pub agent_metadata: HashMap<String, AgentMetadata>,
     pub metadata_tokens: crate::metadata_tokens::MetadataTokens,
+    background_shells: Option<(Agent, u32)>,
+    background_shells_observed_at: Option<Instant>,
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
     reported_resume: Option<crate::agent_resume::ReportedAgentResume>,
     reported_resume_revision: u64,
@@ -176,6 +181,8 @@ impl TerminalState {
             hook_authority: None,
             agent_metadata: HashMap::new(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
+            background_shells: None,
+            background_shells_observed_at: None,
             persisted_agent_session: None,
             reported_resume: None,
             reported_resume_revision: 0,
@@ -210,6 +217,7 @@ impl TerminalState {
         agent: Agent,
         now: Instant,
     ) -> TerminalStateMutation {
+        self.set_background_shells_at(None, None, now);
         let starts_acquisition = !self
             .should_ignore_detected_state_under_full_lifecycle_hook(Some(agent), false)
             && !self.detected_state_observed_before_release_suppression(Some(agent), now);
@@ -2325,6 +2333,8 @@ impl TerminalState {
     }
 
     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {
+        self.background_shells = None;
+        self.background_shells_observed_at = Some(Instant::now());
         self.detected_agent = None;
         self.fallback_state = AgentState::Unknown;
         self.fallback_visible_blocker = false;
@@ -2421,6 +2431,10 @@ impl TerminalState {
         let agent_label = self.effective_agent_label().map(str::to_string);
         let known_agent = self.effective_known_agent();
 
+        if previous_known_agent != known_agent {
+            self.background_shells = None;
+            self.background_shells_observed_at = Some(now);
+        }
         let presentation = self.effective_presentation_for_state_at(state, now);
         self.clear_expiry_pending_for_hidden_metadata();
 
@@ -2609,6 +2623,7 @@ mod tests {
     fn stabilization_uses_raw_policy_state() {
         let detection = AgentDetection {
             state: AgentState::Idle,
+            background_shells: None,
             skip_state_update: false,
             visible_idle: false,
             visible_blocker: false,

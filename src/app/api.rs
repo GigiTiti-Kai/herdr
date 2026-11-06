@@ -381,8 +381,38 @@ impl App {
                 None
             };
         let terminal_cwd_reported = matches!(ev, AppEvent::TerminalCwdReported { .. });
+        let activity_pane = match &ev {
+            AppEvent::BackgroundShellsObserved { pane_id, .. }
+            | AppEvent::AgentProcessDetected { pane_id, .. } => Some(*pane_id),
+            _ => None,
+        };
+        let activity_observation = if let Some(pane_id) = activity_pane {
+            self.state
+                .workspaces
+                .iter()
+                .enumerate()
+                .find_map(|(index, workspace)| {
+                    let terminal_id = &workspace.pane_state(pane_id)?.attached_terminal_id;
+                    let revision = self.state.terminals.get(terminal_id)?.revision;
+                    Some((index, pane_id, terminal_id.clone(), revision))
+                })
+        } else {
+            None
+        };
         let previous_toast = self.state.toast.clone();
         let mut pane_updates = self.state.handle_app_event(ev);
+        if let Some((ws_idx, pane_id, terminal_id, previous_revision)) = activity_observation {
+            if self
+                .state
+                .terminals
+                .get(&terminal_id)
+                .is_some_and(|terminal| terminal.revision != previous_revision)
+            {
+                self.emit_pane_updated(ws_idx, pane_id);
+                self.render_dirty.request_generic();
+                self.render_notify.notify_one();
+            }
+        }
         if update_ready.is_some() {
             self.state.latest_release_notes = crate::release_notes::load_latest();
         }

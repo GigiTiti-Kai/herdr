@@ -13,6 +13,7 @@ pub(crate) struct ResolvedToken {
 pub(crate) enum ResolvedTokenKind {
     StateIcon,
     StateText(String),
+    BackgroundShells(String),
     Machine(String),
     Workspace(String),
     Tab(String),
@@ -29,6 +30,7 @@ impl ResolvedTokenKind {
     fn text_value(&self) -> Option<&str> {
         match self {
             Self::StateText(value)
+            | Self::BackgroundShells(value)
             | Self::Machine(value)
             | Self::Workspace(value)
             | Self::Tab(value)
@@ -71,12 +73,42 @@ pub(crate) fn agent_rows(
     context: AgentTokenContext<'_>,
     state_text: &str,
 ) -> Vec<Vec<ResolvedToken>> {
-    config
-        .rows_for_agent(context.canonical_agent)
+    let configured = config.rows_for_agent(context.canonical_agent);
+    let explicit_shells = configured.iter().flatten().any(|token| {
+        matches!(token.parts().0, AgentSidebarToken::Custom(name) if name == "background_shells")
+    });
+    let mut rows: Vec<Vec<ResolvedToken>> = configured
         .iter()
         .map(|row| resolve_agent_row(row, &context, state_text))
         .filter(|resolved| !resolved.is_empty())
-        .collect()
+        .collect();
+    if !explicit_shells {
+        if let Some(count) = context
+            .tokens
+            .get("background_shells")
+            .filter(|count| !count.is_empty())
+        {
+            let target = rows
+                .iter()
+                .position(|row| {
+                    row.iter()
+                        .any(|token| matches!(token.kind, ResolvedTokenKind::StateText(_)))
+                })
+                .or_else(|| {
+                    rows.iter().position(|row| {
+                        row.iter()
+                            .any(|token| token.kind == ResolvedTokenKind::StateIcon)
+                    })
+                });
+            if let Some(target) = target {
+                rows[target].push(ResolvedToken::new(
+                    ResolvedTokenKind::BackgroundShells(count.clone()),
+                    SidebarTokenStyle::default(),
+                ));
+            }
+        }
+    }
+    rows
 }
 
 /// One entry per configured footer row, resolved against this agent only and
@@ -194,8 +226,15 @@ fn resolve_agent_row(
                 AgentSidebarToken::Custom(name) => context
                     .tokens
                     .get(name)
+                    .filter(|value| name != "background_shells" || !value.is_empty())
                     .cloned()
-                    .map(ResolvedTokenKind::Custom),
+                    .map(|value| {
+                        if name == "background_shells" {
+                            ResolvedTokenKind::BackgroundShells(value)
+                        } else {
+                            ResolvedTokenKind::Custom(value)
+                        }
+                    }),
                 AgentSidebarToken::Styled { .. } => None,
             }?;
             let style = kind

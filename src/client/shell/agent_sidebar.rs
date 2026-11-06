@@ -473,12 +473,30 @@ mod tests {
     const ICON: &str = "\u{e1a0}";
 
     fn rendered(rows_toml: &str, width: u16) -> (Buffer, ClientShellConfig) {
-        let sidebar: crate::config::AgentsSidebarConfig = toml::from_str(rows_toml).unwrap();
         let tokens = HashMap::from([
             ("icon".to_string(), ICON.to_string()),
             ("model".to_string(), "opus-4".to_string()),
             ("empty".to_string(), String::new()),
         ]);
+        rendered_with_tokens(
+            rows_toml,
+            width,
+            "idle",
+            crate::api::schema::AgentStatus::Idle,
+            tokens,
+            None,
+        )
+    }
+
+    fn rendered_with_tokens(
+        rows_toml: &str,
+        width: u16,
+        state_text: &str,
+        status: crate::api::schema::AgentStatus,
+        tokens: HashMap<String, String>,
+        canonical_agent: Option<crate::detect::Agent>,
+    ) -> (Buffer, ClientShellConfig) {
+        let sidebar: crate::config::AgentsSidebarConfig = toml::from_str(rows_toml).unwrap();
         let rows = crate::ui::sidebar_agent_rows(
             &sidebar,
             crate::ui::AgentTokenContext {
@@ -486,26 +504,149 @@ mod tests {
                 workspace: "repo",
                 tab: None,
                 pane: None,
-                agent_label: None,
+                agent_label: canonical_agent.map(crate::detect::agent_label),
                 terminal_title: None,
                 terminal_title_stripped: None,
-                canonical_agent: None,
+                canonical_agent,
                 tokens: &tokens,
             },
-            "idle",
+            state_text,
         );
         let config = ClientShellConfig::from_config(&crate::config::Config::default());
         let rect = Rect::new(0, 0, width, rows.len() as u16);
         let mut buffer = Buffer::empty(rect);
         let row = AgentRow {
             pane_id: "pane_1".into(),
-            status: crate::api::schema::AgentStatus::Idle,
+            status,
             focused: true,
             rows,
             footer: Vec::new(),
         };
         render_agent_row(&mut buffer, rect, &row, &config);
         (buffer, config)
+    }
+
+    fn shell_tokens(count: Option<&str>) -> HashMap<String, String> {
+        let mut tokens = HashMap::from([(
+            "model".into(),
+            "Claude/Opus 5.5 extended thinking context".into(),
+        )]);
+        if let Some(count) = count {
+            tokens.insert("background_shells".into(), count.into());
+        }
+        tokens
+    }
+
+    #[test]
+    fn background_shell_explicit_agent_label_yields_to_the_complete_state() {
+        let (buffer, _) = rendered_with_tokens(
+            r#"rows = [["$model"], ["state_text", "agent", "$background_shells"]]"#,
+            24,
+            "blocked",
+            crate::api::schema::AgentStatus::Blocked,
+            shell_tokens(Some("10 shells")),
+            Some(crate::detect::Agent::Claude),
+        );
+        assert_eq!(row_text(&buffer, 1).trim(), "blocked · 10 shells");
+    }
+
+    #[test]
+    fn background_shell_default_row_keeps_state_and_count_visible_and_distinct() {
+        use crate::api::schema::AgentStatus;
+        for (status, label, wanted) in [
+            (
+                AgentStatus::Working,
+                "working · claude",
+                "working · 2 shells",
+            ),
+            (AgentStatus::Done, "done · claude", "done · 2 shells"),
+            (AgentStatus::Idle, "idle · claude", "idle · 2 shells"),
+            (
+                AgentStatus::Blocked,
+                "blocked · claude",
+                "blocked · 2 shells",
+            ),
+        ] {
+            let (buffer, config) = rendered_with_tokens(
+                r#"rows = [["$model"], [{ token = "state_text", dim = true }]]"#,
+                24,
+                label,
+                status,
+                shell_tokens(Some("2 shells")),
+                Some(crate::detect::Agent::Claude),
+            );
+            assert_eq!(buffer.area.height, 2);
+            let line = row_text(&buffer, 1);
+            assert_eq!(line.trim(), wanted);
+            let shell_x = line.chars().position(|ch| ch == '2').unwrap() as u16;
+            assert_eq!(buffer[(shell_x, 1)].fg, config.palette.mauve);
+            assert!(!buffer[(shell_x, 1)].modifier.contains(Modifier::DIM));
+            assert_eq!(buffer[(3, 1)].fg, status_color(status, &config.palette));
+            assert!(buffer[(3, 1)].modifier.contains(Modifier::DIM));
+            assert!(!row_text(&buffer, 0).contains("shell"));
+        }
+    }
+
+    #[test]
+    fn background_shell_explicit_separate_row_is_single_colored_and_optional() {
+        let rows = r##"rows = [["$model"], ["state_text"], [{ token = "$background_shells", fg = "#123456" }]]"##;
+        let (buffer, _) = rendered_with_tokens(
+            rows,
+            40,
+            "done · claude",
+            crate::api::schema::AgentStatus::Done,
+            shell_tokens(Some("1 shell")),
+            Some(crate::detect::Agent::Claude),
+        );
+        assert_eq!(buffer.area.height, 3);
+        assert_eq!(row_text(&buffer, 1).trim(), "done · claude");
+        assert_eq!(row_text(&buffer, 2).trim(), "1 shell");
+        assert_eq!(buffer[(3, 2)].fg, ratatui::style::Color::Rgb(18, 52, 86));
+        let (empty, _) = rendered_with_tokens(
+            rows,
+            40,
+            "idle · claude",
+            crate::api::schema::AgentStatus::Idle,
+            shell_tokens(None),
+            Some(crate::detect::Agent::Claude),
+        );
+        assert_eq!(
+            empty.area.height, 2,
+            "an absent count must not leave a blank row"
+        );
+    }
+
+    #[test]
+    fn background_shell_agent_specific_and_hidden_config_override_automatic_placement() {
+        let per_agent = r#"
+rows = [["$model"], ["state_text"]]
+[rows_by_agent]
+claude = [["$model"], ["state_text"], ["$background_shells"]]
+"#;
+        let (buffer, config) = rendered_with_tokens(
+            per_agent,
+            40,
+            "idle · claude",
+            crate::api::schema::AgentStatus::Idle,
+            shell_tokens(Some("1 shell")),
+            Some(crate::detect::Agent::Claude),
+        );
+        assert_eq!(buffer.area.height, 3);
+        assert_eq!(row_text(&buffer, 1).trim(), "idle · claude");
+        assert_eq!(row_text(&buffer, 2).trim(), "1 shell");
+        assert_eq!(buffer[(3, 2)].fg, config.palette.mauve);
+
+        let hidden = r#"rows = [["$model"], ["state_text"], [{ token = "$background_shells", rules = [{ contains = "shell", hide = true }] }]]"#;
+        let (buffer, _) = rendered_with_tokens(
+            hidden,
+            40,
+            "idle · claude",
+            crate::api::schema::AgentStatus::Idle,
+            shell_tokens(Some("1 shell")),
+            Some(crate::detect::Agent::Claude),
+        );
+        assert_eq!(buffer.area.height, 2);
+        assert_eq!(row_text(&buffer, 1).trim(), "idle · claude");
     }
 
     fn row_text(buffer: &Buffer, y: u16) -> String {

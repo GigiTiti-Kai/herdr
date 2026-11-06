@@ -172,6 +172,7 @@ fn agent_rows(
         endpoints,
         active_endpoint_id,
         config.agent_panel_sort,
+        &config.agents.pinned,
     )
     .into_iter()
     .filter_map(|row| {

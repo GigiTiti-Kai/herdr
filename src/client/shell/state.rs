@@ -101,6 +101,8 @@ pub(super) struct ShellHitMap {
     pub(super) agent_scrollbar: Rect,
     pub(super) agent_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) agent_max_scroll: usize,
+    /// Rows drawn above the scrolling Agent list; `agent_scroll` does not count them.
+    pub(super) agent_pinned_rows: usize,
     pub(super) agent_sort_toggle: Rect,
     /// The visible Agent panel footer, set only when a footer click action exists.
     pub(super) agent_footer: Rect,

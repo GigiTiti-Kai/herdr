@@ -358,6 +358,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Rows pinned to the bottom of the agent panel. Same syntax as rows; each row comes whole
 # from the first agent that reports any of its tokens, joined by one space.
 # footer = [["$usage_title"], ["$usage_icon", "$usage_5h", "$usage_reset"]]
+# Agent names (as in `herdr agent list`) held right under the agents heading while the
+# rest of the list scrolls. Remove a name and reload the config to release it.
+# pinned = ["sw-coordinator"]
 # Optional canonical agent IDs replace the default rows for matching agents.
 # [ui.sidebar.agents.rows_by_agent]
 # claude = [["state_icon", "machine", "workspace", "tab"], ["terminal_title_stripped"], ["agent"]]

@@ -542,6 +542,13 @@ footer = [
 footer_plugin_action = "example.usage.refresh"
 ```
 
+Hold agents under the `agents` heading with `pinned`, a list of agent names as shown by the `name` field of `herdr agent list`. Pane IDs are not accepted because they change across restarts and moves. Each name's row sits above a one-line separator and stays put while the rest of the list scrolls. Listed names come first, in this order, in the panel and in agent navigation. An agent view still decides who is listed. If the panel cannot fit the pinned rows, the separator, and two list rows, the pinned rows join the scrolling list instead. Collapsed, mobile, and multi-machine lists change order only, without a fixed area. The default is empty; remove a name and reload the config to release it.
+
+```toml
+[ui.sidebar.agents]
+pinned = ["sw-coordinator"]
+```
+
 Sidebar row settings affect only the expanded desktop sidebar. Collapsed and mobile views keep their compact layouts.
 
 ## Notifications

@@ -1277,6 +1277,254 @@ fn agent_footer_drops_top_rows_first_and_keeps_two_list_rows() {
     );
 }
 
+/// Forty one-line idle agents named "agent pane_N", with pane_1 focused.
+fn pinned_snapshot() -> ClientShellSnapshot {
+    let mut projected = snapshot();
+    let template = projected.panes[0].clone();
+    projected.panes = (1..=40)
+        .map(|index| {
+            let mut pane = template.clone();
+            pane.pane_id = format!("pane_{index}");
+            pane.focused = index == 1;
+            pane
+        })
+        .collect();
+    projected.agents = (1..=40)
+        .map(|index| footer_agent(&format!("pane_{index}"), AgentStatus::Idle, index, &[]))
+        .collect();
+    projected
+}
+
+fn pinned_shell_with(
+    pinned: &[&str],
+    configure: impl FnOnce(&mut Config, &mut ClientShellSnapshot),
+) -> ClientShellState {
+    let mut projected = pinned_snapshot();
+    let mut config = Config::default();
+    config.ui.sidebar.agents.rows = vec![vec![crate::config::AgentSidebarToken::Agent]];
+    config.ui.sidebar.agents.pinned = pinned.iter().map(|name| name.to_string()).collect();
+    configure(&mut config, &mut projected);
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    state
+}
+
+fn pinned_shell(pinned: &[&str]) -> ClientShellState {
+    pinned_shell_with(pinned, |_, _| {})
+}
+
+fn agent_hit_ids(state: &ClientShellState) -> Vec<&str> {
+    state
+        .hits
+        .agents
+        .iter()
+        .map(|(_, pane_id)| pane_id.as_str())
+        .collect()
+}
+
+fn focused_pane_target(input: &ClientShellInput) -> &str {
+    let [ClientShellAction::Endpoint { request, .. }] = &input.actions[..] else {
+        panic!("expected one endpoint request, got {:?}", input.actions);
+    };
+    let crate::api::schema::Method::PaneFocus(target) = &request.method else {
+        panic!("expected pane.focus");
+    };
+    &target.pane_id
+}
+
+#[test]
+fn pinned_agents_hold_their_rows_under_the_heading_while_the_list_scrolls() {
+    let mut state = pinned_shell(&["agent pane_30", "agent pane_7"]);
+    let frame = state.compose(106, 30).expect("pinned frame");
+    let list_top = state.hits.agent_sort_toggle.y + 2;
+    let pinned = state.hits.agents[..2].to_vec();
+    assert_eq!(
+        [pinned[0].1.as_str(), pinned[1].1.as_str()],
+        ["pane_30", "pane_7"],
+        "config order, not panel order"
+    );
+    assert_eq!((pinned[0].0.y, pinned[1].0.y), (list_top, list_top + 1));
+    let body = state.hits.agent_body;
+    assert_eq!(body.y, list_top + 3, "two pinned rows and one separator");
+    assert_eq!(sidebar_line(&frame, body, list_top), "agent pane_30");
+    assert_eq!(sidebar_line(&frame, body, list_top + 1), "agent pane_7");
+    assert_eq!(
+        sidebar_line(&frame, body, list_top + 2),
+        "─".repeat(body.width as usize)
+    );
+
+    assert!(state.hits.agent_max_scroll > 0, "the rest must overflow");
+    for scroll in [1, 5, usize::MAX] {
+        state.agent_scroll = scroll;
+        let frame = state.compose(106, 30).expect("scrolled frame");
+        assert_eq!(state.hits.agents[..2], pinned, "scroll {scroll}");
+        assert_eq!(state.hits.agent_body, body, "scroll {scroll}");
+        assert_eq!(sidebar_line(&frame, body, list_top), "agent pane_30");
+    }
+    assert_eq!(state.agent_scroll, state.hits.agent_max_scroll);
+}
+
+#[test]
+fn pinned_agents_never_repeat_in_the_scrolled_list() {
+    let mut state = pinned_shell(&["agent pane_30", "agent pane_7"]);
+    state.compose(106, 30).expect("pinned frame");
+    let mut listed = std::collections::BTreeSet::new();
+    for scroll in 0..=state.hits.agent_max_scroll {
+        state.agent_scroll = scroll;
+        state.compose(106, 30).expect("scrolled frame");
+        let ids = agent_hit_ids(&state);
+        assert_eq!(ids[..2], ["pane_30", "pane_7"]);
+        assert!(
+            !ids[2..].iter().any(|id| ["pane_30", "pane_7"].contains(id)),
+            "scroll {scroll}: {ids:?}"
+        );
+        listed.extend(ids[2..].iter().map(|id| id.to_string()));
+    }
+    assert_eq!(listed.len(), 38, "every other agent stays reachable");
+}
+
+#[test]
+fn clicking_a_pinned_agent_focuses_its_pane_while_the_list_is_scrolled() {
+    let mut state = pinned_shell(&["agent pane_30"]);
+    state.agent_scroll = 4;
+    state.compose(106, 30).expect("pinned frame");
+    let (rect, _) = state.hits.agents[0];
+    let click = left_click(&mut state, rect.x + 1, rect.y);
+    assert_eq!(focused_pane_target(&click), "pane_30");
+}
+
+#[test]
+fn empty_or_unmatched_pinned_leaves_the_agent_panel_untouched() {
+    let mut empty = pinned_shell(&[]);
+    let mut unmatched = pinned_shell(&["nobody"]);
+    for scroll in [0, 5] {
+        empty.agent_scroll = scroll;
+        unmatched.agent_scroll = scroll;
+        let frame = empty.compose(106, 30).expect("empty frame");
+        let other = unmatched.compose(106, 30).expect("unmatched frame");
+        assert_eq!(frame_text(&frame), frame_text(&other));
+        assert_eq!(empty.hits.agents, unmatched.hits.agents);
+        assert_eq!(empty.hits.agent_body, unmatched.hits.agent_body);
+        assert_eq!(empty.hits.agent_pinned_rows, 0);
+        assert_eq!(
+            empty.hits.agent_body.y,
+            empty.hits.agent_sort_toggle.y + 2,
+            "the list starts where it always did"
+        );
+        assert_eq!(empty.hits.agents[0].1, format!("pane_{}", scroll + 1));
+    }
+}
+
+#[test]
+fn pinned_agents_fall_back_to_the_plain_list_when_the_panel_is_too_short() {
+    let mut state = pinned_shell(&["agent pane_30", "agent pane_7", "agent pane_9"]);
+    let (mut held, mut fell_back) = (false, false);
+    for height in 8..=60 {
+        if state.compose(106, height).is_none() || state.hits.agents.is_empty() {
+            continue;
+        }
+        let toggle_y = state.hits.agent_sort_toggle.y;
+        let panel_height = state.hits.sidebar_toggle.bottom() - (toggle_y - 1);
+        // Three header rows, three pinned rows, a separator and the list's two rows.
+        if panel_height >= 9 {
+            assert_eq!(state.hits.agent_pinned_rows, 3, "height {height}");
+            assert_eq!(state.hits.agent_body.y, toggle_y + 2 + 4, "height {height}");
+            assert!(state.hits.agent_body.height >= 2, "height {height}");
+            held = true;
+        } else {
+            assert_eq!(state.hits.agent_pinned_rows, 0, "height {height}");
+            assert_eq!(state.hits.agent_body.y, toggle_y + 2, "height {height}");
+            assert_eq!(
+                state.hits.agents[0].1, "pane_30",
+                "order stays pinned-first"
+            );
+            fell_back = true;
+        }
+    }
+    assert!(held && fell_back, "the sweep must cross the threshold");
+}
+
+#[test]
+fn agent_keys_follow_the_pinned_order_and_reveal_rows_of_the_scrolled_list() {
+    let mut state = pinned_shell(&["agent pane_30", "agent pane_7"]);
+    state.compose(106, 30).expect("pinned frame");
+
+    let mut first = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::FocusAgent(0)),
+        &mut first,
+    );
+    assert_eq!(focused_pane_target(&first), "pane_30");
+
+    // pane_1 is focused at index 2 of pane_30, pane_7, pane_1, pane_2, ...
+    state.agent_scroll = state.hits.agent_max_scroll;
+    state.compose(106, 30).expect("scrolled frame");
+    assert!(!agent_hit_ids(&state).contains(&"pane_2"));
+    let mut next = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::NextAgent),
+        &mut next,
+    );
+    assert_eq!(focused_pane_target(&next), "pane_2");
+    state.compose(106, 30).expect("revealed frame");
+    assert_eq!(
+        state.agent_scroll, 1,
+        "pane_2 is row 1 of the scrolled list"
+    );
+    assert!(agent_hit_ids(&state).contains(&"pane_2"));
+}
+
+#[test]
+fn pinned_agents_lead_priority_and_agent_view_orders() {
+    let mut state = pinned_shell_with(&["agent pane_7"], |config, projected| {
+        config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+        projected.agents[19].agent_status = AgentStatus::Blocked;
+    });
+    state.compose(106, 30).expect("priority frame");
+    assert_eq!(agent_hit_ids(&state)[..2], ["pane_7", "pane_20"]);
+
+    // The view decides who is listed: a pinned agent outside it stays out, and a
+    // view holding only pinned agents is not "no matching agents".
+    let mut state = pinned_shell_with(&["agent pane_7", "agent pane_3"], |_, projected| {
+        projected.agent_view_label = Some("review".into());
+        projected.agent_order = vec!["pane_3".into()];
+    });
+    let frame = state.compose(106, 30).expect("view frame");
+    assert_eq!(agent_hit_ids(&state), ["pane_3"]);
+    assert_eq!(state.hits.agent_pinned_rows, 1);
+    assert!(!frame_text(&frame).contains("no matching agents"));
+}
+
+#[test]
+fn collapsed_and_mobile_agent_lists_only_reorder_for_pinned_agents() {
+    let mut collapsed = pinned_shell(&["agent pane_7"]);
+    collapsed.sidebar_collapsed = true;
+    collapsed.compose(106, 30).expect("collapsed frame");
+    assert_eq!(agent_hit_ids(&collapsed)[..2], ["pane_7", "pane_1"]);
+    assert_eq!(collapsed.hits.agent_pinned_rows, 0);
+
+    let mut mobile = pinned_shell_with(&["agent pane_7"], |config, projected| {
+        config.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+        projected.agents[19].agent_status = AgentStatus::Blocked;
+    });
+    mobile.compose(44, 80).expect("mobile header");
+    let switch = mobile.hits.mobile_switch;
+    left_click(&mut mobile, switch.x, switch.y);
+    mobile.compose(44, 80).expect("mobile switcher");
+    let agents = mobile
+        .hits
+        .mobile_targets
+        .iter()
+        .filter_map(|(_, target)| match target {
+            ClientMobileTarget::Agent { pane_id, .. } => Some(pane_id.as_str()),
+            _ => None,
+        })
+        .take(2)
+        .collect::<Vec<_>>();
+    assert_eq!(agents, ["pane_7", "pane_20"]);
+}
+
 #[test]
 fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
     let mut projected = snapshot();

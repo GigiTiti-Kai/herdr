@@ -453,6 +453,9 @@ pub struct AgentsSidebarConfig {
     /// the footer unclickable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub footer_plugin_action: Option<String>,
+    /// Agent names (the `name` of `herdr agent list`) held above the scrolling
+    /// Agent list and moved to the front of the panel order, in this order.
+    pub pinned: Vec<String>,
 }
 
 impl AgentsSidebarConfig {
@@ -487,6 +490,7 @@ impl Default for AgentsSidebarConfig {
             row_gap: DEFAULT_SIDEBAR_ROW_GAP,
             footer: Vec::new(),
             footer_plugin_action: None,
+            pinned: Vec::new(),
         }
     }
 }
@@ -550,6 +554,18 @@ mod tests {
         assert!(config.agents.footer.is_empty());
         assert_eq!(config.agents.footer_plugin_action, None);
         assert_eq!(config.agents.footer_click_action(), None);
+        assert!(config.agents.pinned.is_empty());
+    }
+
+    #[test]
+    fn parses_pinned_agent_names() {
+        let config: crate::config::Config =
+            toml::from_str("[ui.sidebar.agents]\npinned = [\"sw-coordinator\", \"review\"]\n")
+                .expect("pinned config");
+        assert_eq!(
+            config.ui.sidebar.agents.pinned,
+            ["sw-coordinator", "review"]
+        );
     }
 
     #[test]

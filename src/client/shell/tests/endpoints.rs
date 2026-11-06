@@ -598,6 +598,30 @@ fn agent_navigation_reveal_is_cancelled_by_another_selection() {
 }
 
 #[test]
+fn multi_machine_agent_list_reorders_pinned_agents_without_a_fixed_area() {
+    let (mut state, _) = state_with_scrollable_agents();
+    state.config.agents.pinned = vec!["agent 7".into()];
+    state.agent_scroll = 0;
+    state.compose(100, 28).unwrap();
+    assert_eq!(state.hits.endpoint_agents[0].2, "pane_8");
+    assert_eq!(state.hits.agent_pinned_rows, 0);
+    state.agent_scroll = 2;
+    state.compose(100, 28).unwrap();
+    assert_ne!(state.hits.endpoint_agents[0].2, "pane_8", "the row scrolls");
+    assert_eq!(
+        super::super::aggregate_navigation::online_agent_targets(
+            &state.endpoints,
+            &state.active_endpoint_id,
+            state.config.agent_panel_sort,
+            &state.config.agents.pinned,
+        )[0]
+        .pane_id,
+        "pane_8",
+        "keys follow the drawn order"
+    );
+}
+
+#[test]
 fn agent_navigation_keeps_scroll_when_target_is_visible() {
     let (mut state, _) = state_with_scrollable_agents();
     let (_, endpoint_id, pane_id) = state.hits.endpoint_agents[1].clone();
@@ -605,6 +629,7 @@ fn agent_navigation_keeps_scroll_when_target_is_visible() {
         &state.endpoints,
         &state.active_endpoint_id,
         state.config.agent_panel_sort,
+        &[],
     );
     let index = targets
         .iter()
@@ -1936,6 +1961,7 @@ fn selected_position_sort_uses_public_tab_and_pane_numbers() {
         &state.endpoints,
         &state.active_endpoint_id,
         crate::config::AgentPanelSortConfig::Priority,
+        &[],
     )
     .into_iter()
     .map(|row| row.agent.name.as_deref().expect("agent name"))

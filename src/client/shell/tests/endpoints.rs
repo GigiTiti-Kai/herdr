@@ -597,28 +597,82 @@ fn agent_navigation_reveal_is_cancelled_by_another_selection() {
     }
 }
 
+fn focus_agent_target(state: &mut ClientShellState, index: usize) -> Option<String> {
+    let mut input = ClientShellInput::default();
+    assert!(state
+        .handle_endpoint_navigation(crate::input::KeybindAction::FocusAgent(index), &mut input,));
+    input.actions.iter().find_map(|action| match action {
+        ClientShellAction::ActivateEndpoint {
+            target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
+            ..
+        } => Some(pane_id.clone()),
+        _ => None,
+    })
+}
+
 #[test]
-fn multi_machine_agent_list_reorders_pinned_agents_without_a_fixed_area() {
+fn expanded_multi_machine_agent_list_ignores_pinned_agents() {
+    let (mut plain, _) = state_with_scrollable_agents();
+    let (mut pinned, _) = state_with_scrollable_agents();
+    pinned.config.agents.pinned = vec!["agent 7".into()];
+    for scroll in [0, 6] {
+        plain.agent_scroll = scroll;
+        pinned.agent_scroll = scroll;
+        let plain_frame = plain.compose(100, 28).unwrap();
+        let pinned_frame = pinned.compose(100, 28).unwrap();
+        assert!(
+            plain_frame.cells == pinned_frame.cells,
+            "scroll {scroll}: the drawn list must not change"
+        );
+        assert_eq!(plain.hits.endpoint_agents, pinned.hits.endpoint_agents);
+        assert_eq!(pinned.agent_scroll, scroll);
+    }
+    assert_eq!(pinned.hits.agent_pinned_rows, 0);
+    pinned.agent_scroll = 0;
+    pinned.compose(100, 28).unwrap();
+    assert_eq!(pinned.hits.endpoint_agents[0].2, "pane_1");
+    assert_eq!(
+        focus_agent_target(&mut pinned, 0).as_deref(),
+        Some("pane_1"),
+        "keys follow the drawn order"
+    );
+}
+
+#[test]
+fn collapsed_multi_machine_rail_and_keys_lead_with_pinned_agents() {
     let (mut state, _) = state_with_scrollable_agents();
     state.config.agents.pinned = vec!["agent 7".into()];
+    state.sidebar_collapsed = true;
     state.agent_scroll = 0;
     state.compose(100, 28).unwrap();
     assert_eq!(state.hits.endpoint_agents[0].2, "pane_8");
     assert_eq!(state.hits.agent_pinned_rows, 0);
-    state.agent_scroll = 2;
-    state.compose(100, 28).unwrap();
-    assert_ne!(state.hits.endpoint_agents[0].2, "pane_8", "the row scrolls");
     assert_eq!(
-        super::super::aggregate_navigation::online_agent_targets(
-            &state.endpoints,
-            &state.active_endpoint_id,
-            state.config.agent_panel_sort,
-            &state.config.agents.pinned,
-        )[0]
-        .pane_id,
-        "pane_8",
+        focus_agent_target(&mut state, 0).as_deref(),
+        Some("pane_8"),
         "keys follow the drawn order"
     );
+}
+
+#[test]
+fn mobile_multi_machine_agents_and_keys_lead_with_pinned_agents() {
+    let (mut state, _) = state_with_scrollable_agents();
+    state.config.agents.pinned = vec!["agent 7".into()];
+    state.compose(44, 80).unwrap();
+    assert!(state.mobile_layout_active());
+    state.mobile_switcher_scroll = 0;
+    state.mode = ClientShellMode::Navigate;
+    state.compose(44, 80).unwrap();
+    let first = state
+        .hits
+        .mobile_targets
+        .iter()
+        .find_map(|(_, target)| match target {
+            ClientMobileTarget::Agent { pane_id, .. } => Some(pane_id.as_str()),
+            _ => None,
+        });
+    assert_eq!(first, Some("pane_8"));
+    assert_eq!(focus_agent_target(&mut state, 0).as_deref(), Some("pane_8"));
 }
 
 #[test]

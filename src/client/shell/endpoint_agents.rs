@@ -9,7 +9,7 @@ pub(super) fn render_collapsed(
     config: &ClientShellConfig,
     hits: &mut ShellHitMap,
 ) {
-    let rows = agent_rows(endpoints, active_endpoint_id, config);
+    let rows = agent_rows(endpoints, active_endpoint_id, config, &config.agents.pinned);
     for (index, row) in rows.into_iter().take(area.height as usize).enumerate() {
         let rect = Rect::new(area.x, area.y + index as u16, area.width, 1);
         if row.agent.focused {
@@ -61,7 +61,8 @@ pub(super) fn render_expanded(
     ) {
         return;
     }
-    let rows = agent_rows(endpoints, active_endpoint_id, config);
+    // The expanded multi-machine list ignores `pinned`: only the rail and mobile reorder.
+    let rows = agent_rows(endpoints, active_endpoint_id, config, &[]);
     let footer = crate::ui::sidebar_agent_footer_rows(
         &config.agents.footer,
         // Stale endpoints hold frozen values that would look live in the footer.
@@ -109,7 +110,7 @@ impl ClientShellState {
         if body_height == 0 {
             return;
         }
-        let rows = agent_rows(&self.endpoints, &self.active_endpoint_id, &self.config);
+        let rows = agent_rows(&self.endpoints, &self.active_endpoint_id, &self.config, &[]);
         let Some(target) = rows
             .iter()
             .position(|row| &row.endpoint_id == endpoint_id && row.agent.pane_id == pane_id)
@@ -145,6 +146,7 @@ fn agent_rows(
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
+    pinned: &[String],
 ) -> Vec<EndpointAgentRow> {
     let mut rendered_rows = endpoints
         .iter()
@@ -172,7 +174,7 @@ fn agent_rows(
         endpoints,
         active_endpoint_id,
         config.agent_panel_sort,
-        &config.agents.pinned,
+        pinned,
     )
     .into_iter()
     .filter_map(|row| {

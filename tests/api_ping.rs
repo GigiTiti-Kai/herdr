@@ -2670,7 +2670,8 @@ fn foreground_cwd_unwraps_shell_wrapper_around_agent() {
     let marker = base.join("agent-ready");
     let pid_file = base.join("agent.pid");
     fs::create_dir_all(&worktree).unwrap();
-    fs::copy("/bin/sleep", &fake_agent).unwrap();
+    // Not /bin/sleep: uutils is multicall and refuses to run under another name.
+    fs::copy("/bin/bash", &fake_agent).unwrap();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
     let socket_path = runtime_dir.join("herdr.sock");
@@ -2690,7 +2691,7 @@ fn foreground_cwd_unwraps_shell_wrapper_around_agent() {
         .unwrap()
         .to_string();
     let command = format!(
-        "/bin/bash -c '( cd {} && printf %s $BASHPID > {} && touch {} && exec {} 30 ); :'",
+        "/bin/bash -c '( cd {} && printf %s $BASHPID > {} && touch {} && exec {} -c \"read -t 30\" ); :'",
         worktree.display(),
         pid_file.display(),
         marker.display(),

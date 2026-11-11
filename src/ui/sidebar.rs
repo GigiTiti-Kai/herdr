@@ -108,7 +108,8 @@ pub(crate) fn agent_panel_entries_from(
 /// How adjacent resolved tokens are joined on one line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TokenJoin {
-    /// Contextual separators: `" "` after a state icon or before git status, else `" · "`.
+    /// Contextual separators: `" "` after a state icon, after a blank-only custom token,
+    /// or before git status, else `" · "`.
     Separator,
     /// One blank between every pair of tokens (Agent panel footer rows).
     Space,

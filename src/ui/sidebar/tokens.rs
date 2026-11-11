@@ -317,8 +317,15 @@ pub(crate) fn space_rows(
 }
 
 pub(crate) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'static str {
+    // A blank-only custom token is padding, not content, so it gets no " · " after it.
+    let blank_spacer = matches!(
+        &previous.kind,
+        ResolvedTokenKind::Custom(text)
+            if !text.is_empty() && text.chars().all(|c| c.is_whitespace() || c == '\u{2800}')
+    );
     if matches!(previous.kind, ResolvedTokenKind::StateIcon)
         || matches!(current.kind, ResolvedTokenKind::GitStatus { .. })
+        || blank_spacer
     {
         " "
     } else {
@@ -330,6 +337,35 @@ pub(crate) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'
 mod tests {
     use super::*;
     use crate::config::{AgentSidebarToken, SpaceSidebarToken};
+
+    fn joined(kinds: Vec<ResolvedTokenKind>) -> Vec<&'static str> {
+        let tokens: Vec<_> = kinds.into_iter().map(ResolvedToken::unstyled).collect();
+        tokens.windows(2).map(|p| separator(&p[0], &p[1])).collect()
+    }
+
+    #[test]
+    fn blank_custom_token_joins_with_a_plain_space() {
+        let blank = || ResolvedTokenKind::Custom("\u{2800}".into());
+        assert_eq!(
+            joined(vec![
+                blank(),
+                ResolvedTokenKind::StateIcon,
+                ResolvedTokenKind::StateText("working".into()),
+            ]),
+            [" ", " "]
+        );
+        assert_eq!(
+            joined(vec![
+                ResolvedTokenKind::Custom("abc".into()),
+                ResolvedTokenKind::Custom("def".into()),
+            ]),
+            [" · "]
+        );
+        assert_eq!(
+            joined(vec![blank(), ResolvedTokenKind::Custom("def".into())]),
+            [" "]
+        );
+    }
 
     struct Entry {
         workspace: String,

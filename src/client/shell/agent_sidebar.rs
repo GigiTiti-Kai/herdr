@@ -710,6 +710,31 @@ claude = [["$model"], ["state_text"], ["$background_shells"]]
         assert_eq!(row_text(&buffer, 1).trim(), "idle · claude");
     }
 
+    #[test]
+    fn blank_spacer_aligns_state_icon_with_the_second_row_indent() {
+        let rows = r#"rows = [["$group"], ["$gap", "state_icon", "state_text"]]"#;
+        let icon_x = |tokens: HashMap<String, String>| {
+            let (buffer, _) = rendered_with_tokens(
+                rows,
+                30,
+                "working",
+                crate::api::schema::AgentStatus::Working,
+                tokens,
+                None,
+            );
+            let y = buffer.area.height - 1;
+            let text = row_text(&buffer, y);
+            assert!(text.ends_with("working"), "{text:?}");
+            assert!(!text.contains('·'), "{text:?}");
+            (0..buffer.area.width)
+                .find(|&x| !matches!(buffer[(x, y)].symbol(), " " | "\u{2800}"))
+                .unwrap()
+        };
+        let first = icon_x(HashMap::from([("group".into(), "crowd".into())]));
+        let other = icon_x(HashMap::from([("gap".into(), "\u{2800}".into())]));
+        assert_eq!((first, other), (3, 3));
+    }
+
     fn row_text(buffer: &Buffer, y: u16) -> String {
         (0..buffer.area.width)
             .map(|x| buffer[(x, y)].symbol())

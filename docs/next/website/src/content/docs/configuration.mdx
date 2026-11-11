@@ -455,7 +455,7 @@ With one repository, the `worktree` token adds distinct linked checkouts from th
 
 Left-click any row below the first one to fold a Space entry down to its first row; a `…` marker appears at the right edge and clicking it unfolds the entry. In navigate mode, Space toggles the fold of the selected Space. Fold state persists per client alongside collapsed worktree groups.
 
-Tokens render in their configured order. Herdr normally separates adjacent values with ` · ` and uses a single space after `state_icon`. Missing values and their separators disappear; a row disappears when none of its tokens have a value. Existing custom rows remain unchanged, so add `machine` explicitly if you want machine identity in a custom multi-machine layout. Each layout may contain at most 16 rows, with at most 16 tokens in each row.
+Tokens render in their configured order. Herdr normally separates adjacent values with ` · ` and uses a single space after `state_icon` and after a custom token whose value is only whitespace. Missing values and their separators disappear; a row disappears when none of its tokens have a value. Existing custom rows remain unchanged, so add `machine` explicitly if you want machine identity in a custom multi-machine layout. Each layout may contain at most 16 rows, with at most 16 tokens in each row.
 
 A token entry can also be an inline style table:
 

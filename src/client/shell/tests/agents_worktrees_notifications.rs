@@ -2775,6 +2775,48 @@ fn bottom_footer_band_survives_a_frame_without_a_pane_surface() {
     );
 }
 
+#[test]
+fn bottom_footer_gap_rows_are_blank_default_style_and_not_clickable() {
+    let assert_blank = |frame: &FrameData, gap: Rect| {
+        assert_eq!(gap.height, 1);
+        let plain = crate::protocol::CellData::from_ratatui_cell(&ratatui::buffer::Cell::default());
+        for x in gap.x..gap.right() {
+            let cell = &frame.cells[gap.y as usize * frame.width as usize + x as usize];
+            assert_eq!(cell.symbol, " ");
+            assert_eq!(
+                (cell.fg, cell.bg, cell.modifier),
+                (plain.fg, plain.bg, 0),
+                "gap cell at x={x} must carry no colors"
+            );
+        }
+    };
+    let mut state = bottom_footer_shell(Some("herdr-agent-quota.refresh"));
+    state.config.agents.footer_bar_gap = 1;
+    let frame = state.compose(106, 30).expect("band frame");
+    let layout = state.layout(106, 30);
+    assert_eq!(layout.footer_gap.bottom(), layout.footer_bar.y);
+    assert_blank(&frame, layout.footer_gap);
+    assert_eq!(
+        sidebar_line(&frame, layout.footer_bar, layout.footer_bar.y),
+        "quota │ X1 2d2h"
+    );
+    assert_eq!(state.hits.agent_footer, layout.footer_bar);
+    let click = left_click(&mut state, layout.footer_gap.x + 1, layout.footer_gap.y);
+    assert!(
+        !click
+            .actions
+            .iter()
+            .any(|a| matches!(a, ClientShellAction::Endpoint { .. })),
+        "the gap runs no footer action: {:?}",
+        click.actions
+    );
+
+    state.pane_surface = None;
+    let frame = state.compose(106, 30).expect("unavailable frame");
+    assert_blank(&frame, layout.footer_gap);
+    assert_eq!(state.hits.agent_footer, layout.footer_bar);
+}
+
 /// Two spaces: `client-shell` (a titled head card and a plain card) and `other`.
 /// Unfolded cards add an `agent <pane>` line; folded cards keep the title and state.
 fn fold_snapshot() -> ClientShellSnapshot {

@@ -1095,6 +1095,12 @@
           ]
         },
         {
+          "key": "ui.sidebar.agents.footer_bar_gap",
+          "type": "integer",
+          "default": "0",
+          "description": "Blank rows, 0 to 2, left in the terminal's default colors between the panes and the bottom footer line. Used only while footer_position = \"bottom\" draws the line; on a short screen the gap shrinks before the last pane row does."
+        },
+        {
           "key": "ui.sidebar.agents.folded_rows",
           "type": "list of token rows",
           "default": "[]",

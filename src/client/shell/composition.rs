@@ -103,6 +103,7 @@ impl ClientShellState {
                 &mut self.hits,
             );
         }
+        render::render_footer_gap(&mut buffer, layout.footer_gap);
         if let Some(snapshot) = self.snapshot.as_deref() {
             render::render_footer_band(
                 &mut buffer,
@@ -145,7 +146,12 @@ impl ClientShellState {
         }
         render::render_mode_bar(
             &mut buffer,
-            Rect::new(0, 0, cols, rows.saturating_sub(layout.footer_bar.height)),
+            Rect::new(
+                0,
+                0,
+                cols,
+                rows.saturating_sub(layout.footer_bar.height + layout.footer_gap.height),
+            ),
             self.mode,
             None,
             self.endpoint_error.as_deref(),

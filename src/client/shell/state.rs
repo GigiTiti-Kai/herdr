@@ -63,6 +63,8 @@ pub(super) struct ClientShellLayout {
     /// One-line band under the pane surface for the agent footer; empty unless
     /// `footer_position = "bottom"` with a non-empty footer.
     pub footer_bar: Rect,
+    /// Blank, uncolored rows directly above `footer_bar`; empty without a band.
+    pub footer_gap: Rect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

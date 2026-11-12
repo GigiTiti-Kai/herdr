@@ -544,6 +544,8 @@ footer_plugin_action = "example.usage.refresh"
 
 Set `footer_position = "bottom"` (default `"sidebar"`) to draw the footer as one line along the bottom of the screen, right of the sidebar, instead of inside the Agent panel. Footer rows sit side by side separated by `│`, rows that are only blanks are skipped, the line is cut on the right when it does not fit, and it stays visible when the sidebar is collapsed. It needs a non-empty `footer` and is not used on narrow screens; the click action and reverse-video flash apply to the line.
 
+Set `footer_bar_gap` (default `0`, at most `2`) to leave that many blank, uncolored rows between the panes and the bottom line. The rows use the terminal's default colors and are not clickable; they exist only while the line is drawn, and on a short screen they shrink before the last pane row does.
+
 Fold a space's cards into short rows with `folded_rows`, `fold_toggle_token`, and `start_folded`. `folded_rows` uses the same row syntax as `rows`, and replaces `rows` and `rows_by_agent` for every card in a folded space; rows with no value are hidden. `fold_toggle_token` names the token whose line folds or unfolds its space when clicked. That click does not focus the pane, while the other lines of a card still do. Folding needs both keys; if either is empty or unset, nothing folds. A space whose first card has no value for the toggle token shows no such line, so it cannot be folded. Spaces listed in `start_folded` (by label) begin folded; a click is remembered by space ID, survives a restart for Local, and overrides the list. Folds on other machines last for the client session only.
 
 ```toml

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ratatui::{
     buffer::Buffer,
@@ -23,6 +23,87 @@ pub(super) struct AgentRow {
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
     /// One entry per configured footer row (empty when this agent resolves none).
     pub(super) footer: Vec<Vec<crate::ui::ResolvedToken>>,
+    /// The pane's repository, set only in a space whose agents span several.
+    pub(super) repo: Option<AgentRepo>,
+    /// Index into `rows` of the repository heading, drawn at the title indent.
+    pub(super) repo_heading_row: Option<usize>,
+}
+
+pub(super) struct AgentRepo {
+    key: String,
+    name: String,
+    /// The space title already names this repository.
+    is_space_label: bool,
+}
+
+/// Spaces whose agent panes sit in more than one repository.
+pub(super) fn mixed_repo_spaces(snapshot: &ClientShellSnapshot) -> HashSet<&str> {
+    let agent_panes = snapshot
+        .agents
+        .iter()
+        .map(|agent| agent.pane_id.as_str())
+        .collect::<HashSet<_>>();
+    let mut first_repo = HashMap::new();
+    let mut mixed = HashSet::new();
+    for pane in &snapshot.panes {
+        let Some(git) = pane
+            .git_context
+            .as_ref()
+            .filter(|_| agent_panes.contains(pane.pane_id.as_str()))
+        else {
+            continue;
+        };
+        let first = first_repo
+            .entry(pane.workspace_id.as_str())
+            .or_insert(git.repo_key.as_str());
+        if *first != git.repo_key {
+            mixed.insert(pane.workspace_id.as_str());
+        }
+    }
+    mixed
+}
+
+/// In a space whose agents span several repositories, name the repository
+/// above each run of cards that leaves the one before it. The space title
+/// stands for the repository it is named after. Each row comes with a scope
+/// that keeps equal space ids of different machines apart.
+pub(super) fn insert_repo_headings<'a, S: PartialEq>(
+    rows: impl IntoIterator<Item = (S, &'a mut AgentRow)>,
+) {
+    let mut previous: Option<(S, String, String)> = None;
+    for (scope, row) in rows {
+        let Some(repo) = row.repo.as_ref() else {
+            previous = None;
+            continue;
+        };
+        let same_repo = previous
+            .as_ref()
+            .filter(|(space_scope, space, _)| *space_scope == scope && *space == row.workspace_id)
+            .map(|(_, _, key)| *key == repo.key);
+        let key = repo.key.clone();
+        if !same_repo.unwrap_or(repo.is_space_label) {
+            let heading = vec![crate::ui::ResolvedToken {
+                kind: crate::ui::ResolvedTokenKind::Workspace(format!("+ {}", repo.name)),
+                style: Default::default(),
+            }];
+            // Under the space title when this card carries it, else above the
+            // card's first line of content.
+            let at = row.toggle_row.map_or_else(
+                || {
+                    row.rows
+                        .iter()
+                        .take_while(|tokens| {
+                            tokens.iter().all(crate::ui::ResolvedToken::is_blank_spacer)
+                        })
+                        .count()
+                },
+                |toggle| toggle + 1,
+            );
+            row.rows.insert(at, heading);
+            row.repo_heading_row = Some(at);
+        }
+        previous = Some((scope, row.workspace_id.clone(), key));
+    }
 }
 
 /// The user's click-chosen Agents-panel folds, Local and per remote endpoint.
@@ -502,10 +583,13 @@ pub(super) fn agent_rows(
     machine: Option<&str>,
     folds: Option<&HashMap<String, bool>>,
 ) -> Vec<AgentRow> {
-    ordered_agent_pane_ids(snapshot, config.agent_panel_sort, &config.agents.pinned)
+    let mixed = mixed_repo_spaces(snapshot);
+    let mut rows = ordered_agent_pane_ids(snapshot, config.agent_panel_sort, &config.agents.pinned)
         .into_iter()
-        .filter_map(|pane_id| agent_row(snapshot, &pane_id, config, machine, folds))
-        .collect()
+        .filter_map(|pane_id| agent_row(snapshot, &pane_id, config, machine, folds, &mixed))
+        .collect::<Vec<_>>();
+    insert_repo_headings(rows.iter_mut().map(|row| ((), row)));
+    rows
 }
 
 pub(super) fn agent_row(
@@ -514,6 +598,7 @@ pub(super) fn agent_row(
     config: &ClientShellConfig,
     machine: Option<&str>,
     folds: Option<&HashMap<String, bool>>,
+    mixed_repo_spaces: &HashSet<&str>,
 ) -> Option<AgentRow> {
     let agent = snapshot
         .agents
@@ -547,7 +632,22 @@ pub(super) fn agent_row(
         .iter()
         .cloned()
         .collect::<HashMap<_, _>>();
-    let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
+    let mut tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
+    let repo = pane
+        .and_then(|pane| pane.git_context.as_ref())
+        .filter(|_| mixed_repo_spaces.contains(workspace.workspace_id.as_str()))
+        .map(|git| {
+            // The repository heading names the repo, so drop the server's
+            // `$repo` copy of it from the card.
+            if tokens.get("repo") == Some(&git.repo) {
+                tokens.remove("repo");
+            }
+            AgentRepo {
+                key: git.repo_key.clone(),
+                name: git.repo.clone(),
+                is_space_label: git.repo == workspace.label,
+            }
+        });
     let state_text = labels
         .get(status_text(agent.agent_status))
         .map(String::as_str)
@@ -586,6 +686,8 @@ pub(super) fn agent_row(
         toggle_row,
         rows,
         footer,
+        repo,
+        repo_heading_row: None,
     })
 }
 
@@ -625,7 +727,15 @@ pub(super) fn render_agent_row(
         row.rows.clone()
     };
     for (index, tokens) in rows.iter().take(rect.height as usize).enumerate() {
-        let indent = if index == 0 { 1 } else { 3 };
+        // The repository heading sits at the title indent and does not push
+        // the card's own first line off it.
+        let heading = row.repo_heading_row;
+        let own_index = index - usize::from(heading.is_some_and(|heading| heading < index));
+        let indent = if own_index == 0 || heading == Some(index) {
+            1
+        } else {
+            3
+        };
         let mut spans = vec![ratatui::text::Span::raw(" ".repeat(indent))];
         spans.extend(crate::ui::resolved_token_spans(
             tokens,
@@ -727,6 +837,8 @@ mod tests {
             toggle_row: None,
             rows,
             footer: Vec::new(),
+            repo: None,
+            repo_heading_row: None,
         };
         render_agent_row(&mut buffer, rect, &row, &config);
         (buffer, config)
@@ -968,5 +1080,181 @@ rows = [[{ token = "$icon", fg = "#f9e2af", bold = false, dim = false }, { token
         assert_eq!(buffer[(2, 0)].style(), buffer[(1, 0)].style());
         assert_eq!(buffer[(3, 0)].fg, config.palette.overlay0);
         assert_eq!(buffer[(6, 0)].fg, config.palette.overlay0);
+    }
+
+    const GAP: &str = "\u{2800}";
+    const SCHEDULER: &str = "character-message-scheduler";
+
+    const SPACE_ROWS: &str = r##"
+rows = [["$group"], ["$gap"], ["$model"], ["state_text"], ["$repo", "$worktree"]]
+folded_rows = [["$group"], ["$gap", "state_icon", "state_text"]]
+fold_toggle_token = "$group"
+"##;
+
+    /// A space labelled `prompts-box` with one agent pane per entry, each in
+    /// that repository (`None`: outside any), carrying the tokens the server
+    /// and a group-header plugin give it.
+    fn repo_space(repos: &[Option<&str>]) -> (ClientShellSnapshot, ClientShellConfig) {
+        let mut snapshot = crate::client::shell::tests::snapshot();
+        snapshot.workspaces[0].label = "prompts-box".into();
+        let pane = snapshot.panes.remove(0);
+        for (index, repo) in repos.iter().enumerate() {
+            let pane_id = format!("pane_{}", index + 1);
+            let mut tokens = vec![("model".to_string(), "Claude".to_string())];
+            tokens.push(if index == 0 {
+                ("group".into(), "prompts-box".into())
+            } else {
+                ("gap".into(), GAP.into())
+            });
+            if let Some(repo) = repo.filter(|repo| *repo != "prompts-box") {
+                tokens.push(("repo".into(), repo.into()));
+                tokens.push(("worktree".into(), "wt:rippling-juggling-crystal".into()));
+            }
+            snapshot.panes.push(crate::protocol::ClientShellPane {
+                pane_id: pane_id.clone(),
+                git_context: repo.map(|repo| crate::protocol::ClientShellPaneGitContext {
+                    repo_key: format!("/{repo}/.git"),
+                    repo: repo.into(),
+                    worktree: None,
+                }),
+                focused: false,
+                ..pane.clone()
+            });
+            snapshot.agents.push(crate::protocol::ClientShellAgent {
+                pane_id,
+                workspace_id: "ws_1".into(),
+                tab_id: "tab_1".into(),
+                name: None,
+                display_agent: None,
+                agent: None,
+                title: None,
+                terminal_title: None,
+                terminal_title_stripped: None,
+                agent_status: crate::api::schema::AgentStatus::Idle,
+                state_change_seq: index as u64,
+                state_labels: Vec::new(),
+                tokens,
+                focused: false,
+            });
+        }
+        let mut config = ClientShellConfig::from_config(&crate::config::Config::default());
+        config.agents = toml::from_str(SPACE_ROWS).unwrap();
+        (snapshot, config)
+    }
+
+    /// The panel's lines at the sidebar width the truncation was reported at.
+    fn panel_lines(
+        snapshot: &ClientShellSnapshot,
+        config: &ClientShellConfig,
+        folds: Option<&HashMap<String, bool>>,
+    ) -> Vec<String> {
+        agent_rows(snapshot, config, None, folds)
+            .iter()
+            .flat_map(|row| {
+                let rect = Rect::new(0, 0, 47, row.rows.len() as u16);
+                let mut buffer = Buffer::empty(rect);
+                render_agent_row(&mut buffer, rect, row, config);
+                (0..rect.height)
+                    .map(|y| row_text(&buffer, y))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn mixed_space_heads_the_other_repository_and_drops_its_repo_token() {
+        let (snapshot, config) = repo_space(&[Some("prompts-box"), Some(SCHEDULER)]);
+        assert_eq!(
+            panel_lines(&snapshot, &config, None),
+            [
+                " prompts-box".to_string(),
+                "   Claude".into(),
+                "   idle".into(),
+                format!(" {GAP}"),
+                format!(" + {SCHEDULER}"),
+                "   Claude".into(),
+                "   idle".into(),
+                // `$repo` left the row, so the worktree is no longer truncated.
+                "   wt:rippling-juggling-crystal".into(),
+            ]
+        );
+    }
+
+    #[test]
+    fn mixed_space_heads_the_title_repository_when_it_follows_another() {
+        let (snapshot, config) = repo_space(&[Some(SCHEDULER), Some("prompts-box")]);
+        let rows = agent_rows(&snapshot, &config, None, None);
+        // The heading goes under the title, so the fold click target stays put.
+        assert_eq!(rows[0].toggle_row, Some(0));
+        assert_eq!(rows[0].repo_heading_row, Some(1));
+        assert_eq!(
+            panel_lines(&snapshot, &config, None),
+            [
+                " prompts-box".to_string(),
+                format!(" + {SCHEDULER}"),
+                "   Claude".into(),
+                "   idle".into(),
+                "   wt:rippling-juggling-crystal".into(),
+                format!(" {GAP}"),
+                " + prompts-box".into(),
+                "   Claude".into(),
+                "   idle".into(),
+            ]
+        );
+    }
+
+    #[test]
+    fn mixed_space_heads_each_run_once_and_skips_panes_outside_a_repository() {
+        let headings = |repos: &[Option<&str>]| {
+            let (snapshot, config) = repo_space(repos);
+            panel_lines(&snapshot, &config, None)
+                .into_iter()
+                .filter(|line| line.starts_with(" + "))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            headings(&[Some(SCHEDULER), Some(SCHEDULER), Some("prompts-box")]),
+            [format!(" + {SCHEDULER}"), " + prompts-box".to_string()]
+        );
+        assert_eq!(
+            headings(&[Some("prompts-box"), None, Some(SCHEDULER)]),
+            [format!(" + {SCHEDULER}")]
+        );
+    }
+
+    #[test]
+    fn single_repository_space_keeps_its_repo_token_and_gets_no_heading() {
+        let (mut snapshot, config) = repo_space(&[Some(".prompts-box"), Some(".prompts-box")]);
+        // A plain shell in another repository does not make the agents mixed.
+        let mut shell = snapshot.panes[0].clone();
+        shell.pane_id = "pane_shell".into();
+        shell.git_context.as_mut().unwrap().repo_key = "/other/.git".into();
+        snapshot.panes.push(shell);
+        let lines = panel_lines(&snapshot, &config, None);
+        assert!(
+            !lines.iter().any(|line| line.starts_with(" + ")),
+            "{lines:?}"
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| *line == "   .prompts-box · wt:rippling-juggling-crystal")
+                .count(),
+            2,
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn folded_mixed_space_keeps_the_heading_and_the_card_line_indent() {
+        let (snapshot, config) = repo_space(&[Some("prompts-box"), Some(SCHEDULER)]);
+        let folds = HashMap::from([("ws_1".to_string(), true)]);
+        let lines = panel_lines(&snapshot, &config, Some(&folds));
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        assert_eq!(lines[0], " prompts-box");
+        assert_eq!(lines[2], format!(" + {SCHEDULER}"));
+        // Same line as without the heading: indent 1, spacer, icon, state.
+        assert!(lines[3].starts_with(&format!(" {GAP} ")), "{lines:?}");
+        assert!(lines[3].ends_with(" idle"), "{lines:?}");
     }
 }

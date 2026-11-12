@@ -192,6 +192,7 @@ fn agent_rows(
         .iter()
         .filter_map(|endpoint| {
             endpoint.snapshot.as_deref().map(|snapshot| {
+                let mixed = super::agent_sidebar::mixed_repo_spaces(snapshot);
                 snapshot
                     .agents
                     .iter()
@@ -202,6 +203,7 @@ fn agent_rows(
                             config,
                             Some(&endpoint.label),
                             folds.and_then(|folds| folds.for_endpoint(&endpoint.endpoint_id)),
+                            &mixed,
                         )
                     })
                     .map(|agent| ((endpoint.endpoint_id.clone(), agent.pane_id.clone()), agent))
@@ -211,7 +213,7 @@ fn agent_rows(
         .flatten()
         .collect::<HashMap<_, _>>();
 
-    super::aggregate_navigation::aggregate_agent_rows(
+    let mut rows = super::aggregate_navigation::aggregate_agent_rows(
         endpoints,
         active_endpoint_id,
         config.agent_panel_sort,
@@ -229,5 +231,10 @@ fn agent_rows(
             agent,
         })
     })
-    .collect()
+    .collect::<Vec<_>>();
+    super::agent_sidebar::insert_repo_headings(
+        rows.iter_mut()
+            .map(|row| (&row.endpoint_id, &mut row.agent)),
+    );
+    rows
 }

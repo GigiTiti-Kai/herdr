@@ -73,7 +73,13 @@ pub(super) fn insert_repo_headings<'a, S: PartialEq>(
     let mut previous: Option<(S, String, String)> = None;
     for (scope, row) in rows {
         let Some(repo) = row.repo.as_ref() else {
-            previous = None;
+            // A card outside any repository leaves its own space's run open,
+            // so the next card still gets a heading when its repository changed.
+            if previous.as_ref().is_some_and(|(space_scope, space, _)| {
+                *space_scope != scope || *space != row.workspace_id
+            }) {
+                previous = None;
+            }
             continue;
         };
         let same_repo = previous
@@ -81,7 +87,7 @@ pub(super) fn insert_repo_headings<'a, S: PartialEq>(
             .filter(|(space_scope, space, _)| *space_scope == scope && *space == row.workspace_id)
             .map(|(_, _, key)| *key == repo.key);
         let key = repo.key.clone();
-        if !same_repo.unwrap_or(repo.is_space_label) {
+        if !same_repo.unwrap_or(repo.is_space_label) && !row.rows.is_empty() {
             let heading = vec![crate::ui::ResolvedToken {
                 kind: crate::ui::ResolvedTokenKind::Workspace(format!("+ {}", repo.name)),
                 style: Default::default(),
@@ -588,7 +594,8 @@ pub(super) fn agent_rows(
         .into_iter()
         .filter_map(|pane_id| agent_row(snapshot, &pane_id, config, machine, folds, &mixed))
         .collect::<Vec<_>>();
-    insert_repo_headings(rows.iter_mut().map(|row| ((), row)));
+    // Pinned cards are drawn apart from the list, so a run never crosses that split.
+    insert_repo_headings(rows.iter_mut().map(|row| (row.pinned, row)));
     rows
 }
 
@@ -632,21 +639,24 @@ pub(super) fn agent_row(
         .iter()
         .cloned()
         .collect::<HashMap<_, _>>();
-    let mut tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
+    let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
     let repo = pane
         .and_then(|pane| pane.git_context.as_ref())
         .filter(|_| mixed_repo_spaces.contains(workspace.workspace_id.as_str()))
-        .map(|git| {
-            // The repository heading names the repo, so drop the server's
-            // `$repo` copy of it from the card.
-            if tokens.get("repo") == Some(&git.repo) {
-                tokens.remove("repo");
-            }
-            AgentRepo {
-                key: git.repo_key.clone(),
-                name: git.repo.clone(),
-                is_space_label: git.repo == workspace.label,
-            }
+        .map(|git| AgentRepo {
+            key: git.repo_key.clone(),
+            name: git.repo.clone(),
+            is_space_label: git.repo == workspace.label,
+        });
+    // The repository heading names the repo, so the card's rows drop the
+    // server's `$repo` copy of it. The footer keeps it.
+    let row_tokens = repo
+        .as_ref()
+        .filter(|repo| tokens.get("repo") == Some(&repo.name))
+        .map(|_| {
+            let mut tokens = tokens.clone();
+            tokens.remove("repo");
+            tokens
         });
     let state_text = labels
         .get(status_text(agent.agent_status))
@@ -673,6 +683,10 @@ pub(super) fn agent_row(
     let footer =
         crate::ui::sidebar_agent_footer_candidates(&config.agents.footer, &context, state_text);
     let folded = workspace_folded(config, folds, &workspace.workspace_id, &workspace.label);
+    let context = crate::ui::AgentTokenContext {
+        tokens: row_tokens.as_ref().unwrap_or(&tokens),
+        ..context
+    };
     let crate::ui::AgentRows { rows, toggle_row } =
         crate::ui::sidebar_agent_rows_folded(&config.agents, context, state_text, folded);
     Some(AgentRow {
@@ -1219,6 +1233,45 @@ fold_toggle_token = "$group"
         assert_eq!(
             headings(&[Some("prompts-box"), None, Some(SCHEDULER)]),
             [format!(" + {SCHEDULER}")]
+        );
+        // The card outside any repository does not hide the change behind it.
+        assert_eq!(
+            headings(&[Some(SCHEDULER), None, Some("prompts-box")]),
+            [format!(" + {SCHEDULER}"), " + prompts-box".to_string()]
+        );
+    }
+
+    #[test]
+    fn mixed_space_run_does_not_cross_from_pinned_cards_into_the_list() {
+        let (mut snapshot, mut config) =
+            repo_space(&[Some(SCHEDULER), Some(SCHEDULER), Some("prompts-box")]);
+        snapshot.agents[0].name = Some("pin".into());
+        config.agents.pinned = vec!["pin".into()];
+        let headings = panel_lines(&snapshot, &config, None)
+            .into_iter()
+            .filter(|line| line.starts_with(" + "))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            headings,
+            [
+                format!(" + {SCHEDULER}"),
+                format!(" + {SCHEDULER}"),
+                " + prompts-box".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn mixed_space_footer_keeps_the_repo_token_the_card_rows_drop() {
+        let (snapshot, mut config) = repo_space(&[Some("prompts-box"), Some(SCHEDULER)]);
+        config.agents = toml::from_str(&format!("{SPACE_ROWS}footer = [[\"$repo\"]]")).unwrap();
+        let rows = agent_rows(&snapshot, &config, None, None);
+        assert_eq!(rows[1].footer.len(), 1);
+        assert!(!rows[1].footer[0].is_empty());
+        let lines = panel_lines(&snapshot, &config, None);
+        assert!(
+            lines.contains(&"   wt:rippling-juggling-crystal".to_string()),
+            "{lines:?}"
         );
     }
 

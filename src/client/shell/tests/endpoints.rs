@@ -639,6 +639,52 @@ fn expanded_multi_machine_agent_list_ignores_pinned_agents() {
 }
 
 #[test]
+fn expanded_multi_machine_agent_list_heads_repositories_per_machine() {
+    let (mut state, remote) = state_with_remote();
+    for endpoint_id in [ClientEndpointId::Local, remote] {
+        let mut projection = state
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.endpoint_id == endpoint_id)
+            .unwrap()
+            .snapshot
+            .clone()
+            .unwrap();
+        // Both machines use space id `ws_1`; each has an agent in the repository
+        // its space is named after, then one in `other`.
+        let repos = [projection.workspaces[0].label.clone(), "other".to_string()];
+        projection.agents = (0..2)
+            .map(|index| ClientShellAgent {
+                pane_id: format!("pane_{}", index + 1),
+                focused: false,
+                ..agent(&format!("agent {index}"), AgentStatus::Idle, 1)
+            })
+            .collect();
+        projection.panes = repos
+            .iter()
+            .enumerate()
+            .map(|(index, repo)| ClientShellPane {
+                pane_id: format!("pane_{}", index + 1),
+                git_context: Some(crate::protocol::ClientShellPaneGitContext {
+                    repo_key: format!("/{repo}/.git"),
+                    repo: repo.clone(),
+                    worktree: None,
+                }),
+                ..projection.panes[0].clone()
+            })
+            .collect();
+        state.set_endpoint_snapshot(&endpoint_id, projection);
+    }
+    let rows = frame_rows(&state.compose(100, 40).unwrap());
+    let headings = rows
+        .iter()
+        .filter_map(|row| row.split('│').next()?.trim().strip_prefix("+ "))
+        .collect::<Vec<_>>();
+    // A machine's first card never continues the other machine's last one.
+    assert_eq!(headings, ["other", "other"], "{rows:#?}");
+}
+
+#[test]
 fn collapsed_multi_machine_rail_and_keys_lead_with_pinned_agents() {
     let (mut state, _) = state_with_scrollable_agents();
     state.config.agents.pinned = vec!["agent 7".into()];

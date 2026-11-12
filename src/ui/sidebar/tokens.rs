@@ -54,6 +54,15 @@ impl ResolvedToken {
     pub(super) fn unstyled(kind: ResolvedTokenKind) -> Self {
         Self::new(kind, SidebarTokenStyle::default())
     }
+
+    /// A blank-only custom token is padding, not content.
+    pub(crate) fn is_blank_spacer(&self) -> bool {
+        matches!(
+            &self.kind,
+            ResolvedTokenKind::Custom(text)
+                if !text.is_empty() && text.chars().all(|c| c.is_whitespace() || c == '\u{2800}')
+        )
+    }
 }
 
 pub(crate) struct AgentTokenContext<'a> {
@@ -356,15 +365,10 @@ pub(crate) fn space_rows(
 }
 
 pub(crate) fn separator(previous: &ResolvedToken, current: &ResolvedToken) -> &'static str {
-    // A blank-only custom token is padding, not content, so it gets no " · " after it.
-    let blank_spacer = matches!(
-        &previous.kind,
-        ResolvedTokenKind::Custom(text)
-            if !text.is_empty() && text.chars().all(|c| c.is_whitespace() || c == '\u{2800}')
-    );
+    // Padding gets no " · " after it.
     if matches!(previous.kind, ResolvedTokenKind::StateIcon)
         || matches!(current.kind, ResolvedTokenKind::GitStatus { .. })
-        || blank_spacer
+        || previous.is_blank_spacer()
     {
         " "
     } else {

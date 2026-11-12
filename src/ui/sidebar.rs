@@ -6,11 +6,13 @@ use ratatui::{
     text::Span,
 };
 
+#[cfg(test)]
+pub(crate) use self::tokens::agent_rows as sidebar_agent_rows;
 pub(crate) use self::tokens::{
     agent_footer_candidates as sidebar_agent_footer_candidates,
-    agent_footer_rows as sidebar_agent_footer_rows, agent_rows as sidebar_agent_rows,
-    space_rows as sidebar_space_rows, AgentTokenContext, ResolvedToken, ResolvedTokenKind,
-    SpaceTokenContext,
+    agent_footer_rows as sidebar_agent_footer_rows, agent_rows_folded as sidebar_agent_rows_folded,
+    space_rows as sidebar_space_rows, AgentRows, AgentTokenContext, ResolvedToken,
+    ResolvedTokenKind, SpaceTokenContext,
 };
 use super::text::{display_width, truncate_end};
 use crate::app::state::Palette;

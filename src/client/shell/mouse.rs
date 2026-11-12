@@ -2196,6 +2196,20 @@ impl ClientShellState {
                     self.tab_press = Some(tab_press);
                     return;
                 }
+                let agent_fold = self
+                    .hits
+                    .agent_fold_toggles
+                    .iter()
+                    .find(|(rect, ..)| super::contains(*rect, point))
+                    .map(|(_, endpoint_id, workspace_id, folded)| {
+                        (endpoint_id.clone(), workspace_id.clone(), *folded)
+                    });
+                if let Some((endpoint_id, workspace_id, folded)) = agent_fold {
+                    self.set_agent_fold(&endpoint_id, workspace_id, !folded);
+                    outcome.repaint = true;
+                    self.persist_chrome_preferences(outcome);
+                    return;
+                }
                 if self.handle_endpoint_agent_click(point, outcome) {
                     return;
                 }

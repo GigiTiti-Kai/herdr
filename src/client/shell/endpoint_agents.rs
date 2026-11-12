@@ -9,7 +9,13 @@ pub(super) fn render_collapsed(
     config: &ClientShellConfig,
     hits: &mut ShellHitMap,
 ) {
-    let rows = agent_rows(endpoints, active_endpoint_id, config, &config.agents.pinned);
+    let rows = agent_rows(
+        endpoints,
+        active_endpoint_id,
+        config,
+        &config.agents.pinned,
+        None,
+    );
     for (index, row) in rows.into_iter().take(area.height as usize).enumerate() {
         let rect = Rect::new(area.x, area.y + index as u16, area.width, 1);
         if row.agent.focused {
@@ -50,6 +56,7 @@ pub(super) fn render_expanded(
     active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
     agent_scroll: &mut usize,
+    folds: super::agent_sidebar::AgentFolds<'_>,
     hits: &mut ShellHitMap,
 ) {
     if !super::agent_sidebar::render_agent_panel_header(
@@ -62,7 +69,7 @@ pub(super) fn render_expanded(
         return;
     }
     // The expanded multi-machine list ignores `pinned`: only the rail and mobile reorder.
-    let rows = agent_rows(endpoints, active_endpoint_id, config, &[]);
+    let rows = agent_rows(endpoints, active_endpoint_id, config, &[], Some(folds));
     let footer = if config.agents.footer_in_bottom_bar() {
         Vec::new()
     } else {
@@ -90,6 +97,7 @@ pub(super) fn render_expanded(
             }
             hits.endpoint_agents
                 .push((rect, row.endpoint_id.clone(), row.agent.pane_id.clone()));
+            super::agent_sidebar::push_fold_hit(hits, rect, &row.endpoint_id, &row.agent);
         },
     );
 }
@@ -104,7 +112,16 @@ impl ClientShellState {
         if body_height == 0 {
             return;
         }
-        let rows = agent_rows(&self.endpoints, &self.active_endpoint_id, &self.config, &[]);
+        let rows = agent_rows(
+            &self.endpoints,
+            &self.active_endpoint_id,
+            &self.config,
+            &[],
+            Some(super::agent_sidebar::AgentFolds {
+                local: &self.agent_folds,
+                remote: &self.remote_agent_folds,
+            }),
+        );
         let Some(target) = rows
             .iter()
             .position(|row| &row.endpoint_id == endpoint_id && row.agent.pane_id == pane_id)
@@ -160,7 +177,7 @@ pub(super) fn bar_footer_rows(
     active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
 ) -> Vec<Vec<crate::ui::ResolvedToken>> {
-    let rows = agent_rows(endpoints, active_endpoint_id, config, &[]);
+    let rows = agent_rows(endpoints, active_endpoint_id, config, &[], None);
     footer_from_rows(endpoints, config, &rows)
 }
 
@@ -169,6 +186,7 @@ fn agent_rows(
     active_endpoint_id: &ClientEndpointId,
     config: &ClientShellConfig,
     pinned: &[String],
+    folds: Option<super::agent_sidebar::AgentFolds<'_>>,
 ) -> Vec<EndpointAgentRow> {
     let mut rendered_rows = endpoints
         .iter()
@@ -183,6 +201,7 @@ fn agent_rows(
                             &agent.pane_id,
                             config,
                             Some(&endpoint.label),
+                            folds.and_then(|folds| folds.for_endpoint(&endpoint.endpoint_id)),
                         )
                     })
                     .map(|agent| ((endpoint.endpoint_id.clone(), agent.pane_id.clone()), agent))

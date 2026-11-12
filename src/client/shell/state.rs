@@ -100,6 +100,8 @@ pub(super) struct ShellHitMap {
     pub(super) pane_splits: Vec<PaneSplitHit>,
     pub(super) agents: Vec<(Rect, String)>,
     pub(super) endpoint_agents: Vec<(Rect, ClientEndpointId, String)>,
+    /// The fold-toggle line of each visible card: (line, endpoint, space ID, folded now).
+    pub(super) agent_fold_toggles: Vec<(Rect, ClientEndpointId, String, bool)>,
     pub(super) agent_body: Rect,
     pub(super) agent_scrollbar: Rect,
     pub(super) agent_scroll_metrics: Option<crate::pane::ScrollMetrics>,
@@ -898,6 +900,10 @@ pub(crate) struct ClientShellState {
     // Remote workspace IDs are server-local. Keep folds separate from Local's
     // persisted preferences and from other endpoints for this client session.
     pub(super) remote_folded_workspaces: HashMap<ClientEndpointId, HashSet<String>>,
+    /// Agents-panel folds the user chose (space ID -> folded). Local persists;
+    /// remote ones live for this client session only, like the Spaces folds.
+    pub(super) agent_folds: HashMap<String, bool>,
+    pub(super) remote_agent_folds: HashMap<ClientEndpointId, HashMap<String, bool>>,
     pub(super) remote_collapsed_groups: HashMap<ClientEndpointId, HashSet<String>>,
     pub(super) workspace_scroll: usize,
     pub(super) agent_scroll: usize,
@@ -1076,6 +1082,8 @@ impl ClientShellState {
             collapsed_groups: preferences.collapsed_groups.into_iter().collect(),
             folded_workspaces: preferences.folded_workspaces.into_iter().collect(),
             remote_folded_workspaces: HashMap::new(),
+            agent_folds: preferences.agent_folds.into_iter().collect(),
+            remote_agent_folds: HashMap::new(),
             remote_collapsed_groups,
             workspace_scroll: 0,
             agent_scroll: 0,
@@ -1220,6 +1228,21 @@ impl ClientShellState {
         if !folded.remove(&workspace_id) {
             folded.insert(workspace_id);
         }
+    }
+
+    /// Set the user's Agents-panel fold choice for a space. Only Local is persisted.
+    pub(super) fn set_agent_fold(
+        &mut self,
+        endpoint: &ClientEndpointId,
+        workspace_id: String,
+        folded: bool,
+    ) {
+        let folds = if endpoint.is_local() {
+            &mut self.agent_folds
+        } else {
+            self.remote_agent_folds.entry(endpoint.clone()).or_default()
+        };
+        folds.insert(workspace_id, folded);
     }
 
     pub(super) fn navigation_workspace_entries(

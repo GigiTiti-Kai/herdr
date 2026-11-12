@@ -2748,3 +2748,316 @@ fn bottom_footer_click_runs_the_plugin_action_and_flashes_the_band() {
     inert.compose(106, 30).expect("band frame");
     assert_eq!(inert.hits.agent_footer, Rect::default());
 }
+
+#[test]
+fn bottom_footer_band_survives_a_frame_without_a_pane_surface() {
+    let mut state = bottom_footer_shell(Some("herdr-agent-quota.refresh"));
+    state.pane_surface = None;
+    let frame = state.compose(106, 30).expect("unavailable frame");
+    let bar = state.layout(106, 30).footer_bar;
+    assert_eq!(sidebar_line(&frame, bar, bar.y), "quota │ X1 2d2h");
+    assert_eq!(state.hits.agent_footer, bar);
+
+    // A mode bar uses the row above the band instead of covering it.
+    state.mode = ClientShellMode::Resize;
+    let frame = state.compose(106, 30).expect("unavailable resize frame");
+    assert_eq!(sidebar_line(&frame, bar, bar.y), "quota │ X1 2d2h");
+    assert!(sidebar_line(&frame, Rect::new(0, 0, 106, 30), bar.y - 1).contains("RESIZE"));
+
+    // No snapshot, no band.
+    let mut empty = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    empty.config.agents.footer_position = crate::config::AgentFooterPositionConfig::Bottom;
+    empty.config.agents.footer = vec![vec![crate::config::AgentSidebarToken::Custom("x".into())]];
+    let frame = empty.compose(106, 30).expect("empty frame");
+    assert_eq!(
+        sidebar_line(&frame, empty.layout(106, 30).footer_bar, 29),
+        ""
+    );
+}
+
+/// Two spaces: `client-shell` (a titled head card and a plain card) and `other`.
+/// Unfolded cards add an `agent <pane>` line; folded cards keep the title and state.
+fn fold_snapshot() -> ClientShellSnapshot {
+    let mut projected = snapshot();
+    let mut second = projected.workspaces[0].clone();
+    second.workspace_id = "ws_2".into();
+    second.label = "other".into();
+    second.number = 2;
+    second.focused = false;
+    projected.workspaces.push(second);
+    let agent = |pane: &str, workspace: &str, status, seq, tokens: &[(&str, &str)]| {
+        let mut agent = footer_agent(pane, status, seq, tokens);
+        agent.workspace_id = workspace.into();
+        agent
+    };
+    projected.agents = vec![
+        agent(
+            "pane_1",
+            "ws_1",
+            AgentStatus::Idle,
+            1,
+            &[("title", "client-shell")],
+        ),
+        agent("pane_2", "ws_1", AgentStatus::Working, 2, &[]),
+        agent(
+            "pane_3",
+            "ws_2",
+            AgentStatus::Idle,
+            3,
+            &[("title", "other")],
+        ),
+    ];
+    projected
+}
+
+fn fold_config(configure: impl FnOnce(&mut crate::config::AgentsSidebarConfig)) -> Config {
+    use crate::config::AgentSidebarToken::{Agent, Custom, StateIcon, StateText};
+    let mut config = Config::default();
+    let agents = &mut config.ui.sidebar.agents;
+    // rows_by_agent must lose to folded_rows while folded.
+    agents.rows_by_agent.insert(
+        "pi".into(),
+        vec![
+            vec![Custom("title".into())],
+            vec![StateIcon, StateText],
+            vec![Agent],
+        ],
+    );
+    agents.folded_rows = vec![vec![Custom("title".into())], vec![StateText]];
+    agents.fold_toggle_token = Some("$title".into());
+    configure(agents);
+    config
+}
+
+fn fold_shell_from(config: &Config, path: Option<std::path::PathBuf>) -> ClientShellState {
+    let mut shell_config = ClientShellConfig::from_config(config);
+    if let Some(path) = path {
+        shell_config = shell_config.with_preferences_path(path);
+    }
+    let mut state = ClientShellState::new(shell_config);
+    state.set_snapshot(Box::new(fold_snapshot()));
+    state.set_pane_surface(surface());
+    state
+}
+
+fn fold_shell(configure: impl FnOnce(&mut crate::config::AgentsSidebarConfig)) -> ClientShellState {
+    fold_shell_from(&fold_config(configure), None)
+}
+
+fn fold_state_of(state: &ClientShellState, workspace_id: &str) -> Option<bool> {
+    state
+        .hits
+        .agent_fold_toggles
+        .iter()
+        .find(|(_, _, id, _)| id == workspace_id)
+        .map(|(_, _, _, folded)| *folded)
+}
+
+#[test]
+fn agent_title_click_folds_only_its_space_and_unfolds_again() {
+    let mut state = fold_shell(|_| {});
+    let text = frame_text(&state.compose(106, 30).expect("open frame"));
+    for pane in ["pane_1", "pane_2", "pane_3"] {
+        assert!(text.contains(&format!("agent {pane}")), "frame: {text}");
+    }
+    assert_eq!(state.hits.agent_fold_toggles.len(), 2);
+    assert_eq!(fold_state_of(&state, "ws_1"), Some(false));
+
+    let (title, endpoint, workspace, _) = state.hits.agent_fold_toggles[0].clone();
+    assert_eq!(
+        (endpoint, workspace.as_str()),
+        (ClientEndpointId::Local, "ws_1")
+    );
+    let click = left_click(&mut state, title.x + 1, title.y);
+    assert!(
+        click.actions.is_empty(),
+        "the title line must not focus: {:?}",
+        click.actions
+    );
+
+    let text = frame_text(&state.compose(106, 30).expect("folded frame"));
+    assert!(
+        !text.contains("agent pane_1") && !text.contains("agent pane_2"),
+        "frame: {text}"
+    );
+    assert!(
+        text.contains("agent pane_3"),
+        "other spaces keep their cards: {text}"
+    );
+    assert_eq!(fold_state_of(&state, "ws_1"), Some(true));
+    assert_eq!(fold_state_of(&state, "ws_2"), Some(false));
+
+    let title = state.hits.agent_fold_toggles[0].0;
+    left_click(&mut state, title.x + 1, title.y);
+    let text = frame_text(&state.compose(106, 30).expect("reopened frame"));
+    assert!(
+        text.contains("agent pane_1") && text.contains("agent pane_2"),
+        "frame: {text}"
+    );
+    assert_eq!(fold_state_of(&state, "ws_1"), Some(false));
+}
+
+#[test]
+fn agent_card_lines_other_than_the_title_still_focus_the_pane() {
+    let focused_pane = |input: ClientShellInput| match &input.actions[..] {
+        [ClientShellAction::Endpoint { request, .. }] => match &request.method {
+            crate::api::schema::Method::PaneFocus(target) => target.pane_id.clone(),
+            method => panic!("expected pane.focus, got {method:?}"),
+        },
+        actions => panic!("expected one endpoint request, got {actions:?}"),
+    };
+    let mut state = fold_shell(|_| {});
+    state.compose(106, 30).expect("open frame");
+    let head = state.hits.agents[0].0;
+    assert_eq!(
+        state.hits.agent_fold_toggles[0].0.y, head.y,
+        "title is the first line"
+    );
+    assert_eq!(
+        focused_pane(left_click(&mut state, head.x + 1, head.y + 1)),
+        "pane_1"
+    );
+
+    let title = state.hits.agent_fold_toggles[0].0;
+    left_click(&mut state, title.x + 1, title.y);
+    state.compose(106, 30).expect("folded frame");
+    let (head, plain) = (state.hits.agents[0].0, state.hits.agents[1].0);
+    assert_eq!(head.height, 2, "folded head keeps title and state");
+    assert_eq!(plain.height, 1, "folded plain card is one line");
+    assert_eq!(
+        focused_pane(left_click(&mut state, head.x + 1, head.y + 1)),
+        "pane_1"
+    );
+    assert_eq!(
+        focused_pane(left_click(&mut state, plain.x + 1, plain.y)),
+        "pane_2"
+    );
+}
+
+#[test]
+fn start_folded_applies_until_clicked_and_the_click_is_saved() {
+    let path = std::env::temp_dir().join(format!("herdr-agent-fold-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let config = fold_config(|agents| agents.start_folded = vec!["client-shell".into()]);
+    let mut state = fold_shell_from(&config, Some(path.clone()));
+    state.compose(106, 30).expect("initial frame");
+    assert_eq!(
+        fold_state_of(&state, "ws_1"),
+        Some(true),
+        "listed label starts folded"
+    );
+    assert_eq!(fold_state_of(&state, "ws_2"), Some(false));
+    assert!(
+        state.agent_folds.is_empty(),
+        "start_folded is a default, not saved state"
+    );
+
+    let title = state.hits.agent_fold_toggles[0].0;
+    left_click(&mut state, title.x + 1, title.y);
+    state.compose(106, 30).expect("unfolded frame");
+    assert_eq!(fold_state_of(&state, "ws_1"), Some(false));
+    let saved = preferences::load(&path).expect("saved preferences");
+    assert_eq!(saved.agent_folds, [("ws_1".to_owned(), false)].into());
+
+    let mut restored = fold_shell_from(&config, Some(path.clone()));
+    restored.compose(106, 30).expect("restored frame");
+    assert_eq!(
+        fold_state_of(&restored, "ws_1"),
+        Some(false),
+        "the saved click beats start_folded after a restart"
+    );
+    let title = restored.hits.agent_fold_toggles[0].0;
+    left_click(&mut restored, title.x + 1, title.y);
+    let saved = preferences::load(&path).expect("saved preferences");
+    assert_eq!(saved.agent_folds, [("ws_1".to_owned(), true)].into());
+
+    // A saved fold survives a restart with no start_folded at all.
+    let mut again = fold_shell_from(&fold_config(|_| {}), Some(path.clone()));
+    again.compose(106, 30).expect("second restored frame");
+    assert_eq!(fold_state_of(&again, "ws_1"), Some(true));
+    assert_eq!(fold_state_of(&again, "ws_2"), Some(false));
+    std::fs::remove_file(path).expect("remove preferences");
+}
+
+#[test]
+fn folding_stays_off_without_folded_rows_or_toggle_token() {
+    let configs = [
+        fold_config(|agents| agents.folded_rows.clear()),
+        fold_config(|agents| agents.fold_toggle_token = None),
+    ];
+    for mut config in configs {
+        config.ui.sidebar.agents.start_folded = vec!["client-shell".into()];
+        let mut state = fold_shell_from(&config, None);
+        let text = frame_text(&state.compose(106, 30).expect("frame"));
+        assert!(
+            text.contains("agent pane_1"),
+            "start_folded is ignored: {text}"
+        );
+        assert!(state.hits.agent_fold_toggles.is_empty());
+        let head = state.hits.agents[0].0;
+        let click = left_click(&mut state, head.x + 1, head.y);
+        let [ClientShellAction::Endpoint { request, .. }] = &click.actions[..] else {
+            panic!("the title line should focus the pane: {:?}", click.actions);
+        };
+        assert!(matches!(
+            &request.method,
+            crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_1"
+        ));
+    }
+}
+
+#[test]
+fn agent_folds_are_kept_per_machine_and_only_local_is_saved() {
+    use crate::client::endpoint::{ClientEndpointStatus, ProfileId, SavedSshEndpoint};
+    let path = std::env::temp_dir().join(format!(
+        "herdr-agent-fold-remote-{}.json",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let mut state = fold_shell_from(&fold_config(|_| {}), Some(path.clone()));
+    let profile = SavedSshEndpoint {
+        id: ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+        label: "Build".into(),
+        target: "dev@build.example".into(),
+        session: "agents".into(),
+        enabled: true,
+    };
+    let remote_id = ClientEndpointId::Ssh(profile.id.clone());
+    state.set_endpoint_catalog(&[profile]);
+    state.set_endpoint_status(&remote_id, ClientEndpointStatus::Online);
+    let mut remote = fold_snapshot();
+    remote.boot_id = "remote-boot".into();
+    state.set_endpoint_snapshot(&remote_id, Box::new(remote));
+
+    // Both machines have a `ws_1`; the cards come from both, Local first.
+    let text = frame_text(&state.compose(100, 40).expect("combined frame"));
+    assert_eq!(text.matches("agent pane_1").count(), 2, "frame: {text}");
+    let remote_title = state
+        .hits
+        .agent_fold_toggles
+        .iter()
+        .find(|(_, endpoint, workspace, _)| *endpoint == remote_id && workspace == "ws_1")
+        .map(|(rect, ..)| *rect)
+        .expect("remote title line");
+    let click = left_click(&mut state, remote_title.x + 1, remote_title.y);
+    assert!(
+        click.actions.is_empty(),
+        "title line must not switch machines: {:?}",
+        click.actions
+    );
+
+    let text = frame_text(&state.compose(100, 40).expect("remote folded frame"));
+    assert_eq!(
+        text.matches("agent pane_1").count(),
+        1,
+        "only the remote ws_1 folded: {text}"
+    );
+    assert!(state.agent_folds.is_empty());
+    assert!(state.remote_agent_folds[&remote_id]["ws_1"]);
+    let saved = preferences::load(&path);
+    assert!(
+        saved.is_none_or(|saved| saved.agent_folds.is_empty()),
+        "remote folds are not saved"
+    );
+    let _ = std::fs::remove_file(path);
+}

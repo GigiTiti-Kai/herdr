@@ -434,6 +434,19 @@ where
     Ok(rows_by_agent)
 }
 
+fn deserialize_fold_toggle_token<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let token = Option::<String>::deserialize(deserializer)?;
+    if let Some(token) = &token {
+        // No built-ins: a built-in would sit in every card and make every click a fold.
+        parse_sidebar_token::<AgentSidebarToken>(token.clone(), &[])
+            .map_err(serde::de::Error::custom)?;
+    }
+    Ok(token)
+}
+
 /// Where the Agent panel footer is drawn (fork-only `footer_position`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -467,6 +480,19 @@ pub struct AgentsSidebarConfig {
     /// `bottom` draws the footer as one line across the bottom of the screen
     /// instead of inside the Agent panel. Needs a non-empty `footer`.
     pub footer_position: AgentFooterPositionConfig,
+    /// Fork-only. Rows used instead of `rows`/`rows_by_agent` for an agent whose
+    /// space is folded. Same syntax as `rows`. Empty disables folding.
+    #[serde(deserialize_with = "deserialize_sidebar_rows")]
+    pub folded_rows: AgentSidebarRows,
+    /// Fork-only. A click on a row holding this custom `$name` token folds or
+    /// unfolds its space instead of focusing the pane. Unset disables folding.
+    #[serde(
+        deserialize_with = "deserialize_fold_toggle_token",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fold_toggle_token: Option<String>,
+    /// Fork-only. Space labels that start folded until the user clicks one.
+    pub start_folded: Vec<String>,
     /// Agent names (the `name` of `herdr agent list`) held above the scrolling
     /// Agent list and moved to the front of the panel order, in this order.
     pub pinned: Vec<String>,
@@ -477,6 +503,19 @@ impl AgentsSidebarConfig {
         agent
             .and_then(|agent| self.rows_by_agent.get(crate::detect::agent_label(agent)))
             .unwrap_or(&self.rows)
+    }
+
+    /// Folding needs both a folded layout and a token to click.
+    pub(crate) fn fold_enabled(&self) -> bool {
+        !self.folded_rows.is_empty() && self.fold_toggle_token.is_some()
+    }
+
+    /// The `name` of the fold-toggle `$name` token, when folding is enabled.
+    pub(crate) fn fold_toggle_name(&self) -> Option<&str> {
+        self.fold_toggle_token
+            .as_deref()
+            .and_then(|token| token.strip_prefix('$'))
+            .filter(|_| self.fold_enabled())
     }
 
     /// True when the footer is drawn as the bottom band, not in the Agent panel.
@@ -510,6 +549,9 @@ impl Default for AgentsSidebarConfig {
             footer: Vec::new(),
             footer_plugin_action: None,
             footer_position: AgentFooterPositionConfig::Sidebar,
+            folded_rows: Vec::new(),
+            fold_toggle_token: None,
+            start_folded: Vec::new(),
             pinned: Vec::new(),
         }
     }
@@ -579,6 +621,49 @@ mod tests {
             AgentFooterPositionConfig::Sidebar
         );
         assert!(config.agents.pinned.is_empty());
+        assert!(config.agents.folded_rows.is_empty());
+        assert_eq!(config.agents.fold_toggle_token, None);
+        assert!(config.agents.start_folded.is_empty());
+        assert!(!config.agents.fold_enabled());
+    }
+
+    #[test]
+    fn fold_keys_read_and_need_both_rows_and_token_to_enable() {
+        let parse = |body: &str| {
+            toml::from_str::<crate::config::Config>(&format!("[ui.sidebar.agents]\n{body}"))
+        };
+        let agents = parse(
+            "folded_rows = [[\"$title\"], [\"state_icon\", \"state_text\"]]\n\
+             fold_toggle_token = \"$title\"\n\
+             start_folded = [\"crowdsourcing\"]\n",
+        )
+        .expect("fold keys")
+        .ui
+        .sidebar
+        .agents;
+        assert_eq!(agents.folded_rows.len(), 2);
+        assert_eq!(agents.fold_toggle_token.as_deref(), Some("$title"));
+        assert_eq!(agents.fold_toggle_name(), Some("title"));
+        assert_eq!(agents.start_folded, ["crowdsourcing"]);
+        assert!(agents.fold_enabled());
+
+        let rows_only = parse("folded_rows = [[\"state_icon\"]]\n").expect("rows only");
+        assert!(!rows_only.ui.sidebar.agents.fold_enabled());
+        let token_only = parse("fold_toggle_token = \"$title\"\n").expect("token only");
+        assert!(!token_only.ui.sidebar.agents.fold_enabled());
+
+        for bad in [
+            "fold_toggle_token = 1",
+            "fold_toggle_token = \"title\"",
+            "fold_toggle_token = \"state_icon\"",
+            "fold_toggle_token = \"$\"",
+            "start_folded = \"crowdsourcing\"",
+            "start_folded = [1]",
+            "folded_rows = [\"state_icon\"]",
+            "folded_rows = [[\"nope\"]]",
+        ] {
+            assert!(parse(bad).is_err(), "{bad} should be rejected");
+        }
     }
 
     #[test]

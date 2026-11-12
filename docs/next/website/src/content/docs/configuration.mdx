@@ -544,6 +544,15 @@ footer_plugin_action = "example.usage.refresh"
 
 Set `footer_position = "bottom"` (default `"sidebar"`) to draw the footer as one line along the bottom of the screen, right of the sidebar, instead of inside the Agent panel. Footer rows sit side by side separated by `│`, rows that are only blanks are skipped, the line is cut on the right when it does not fit, and it stays visible when the sidebar is collapsed. It needs a non-empty `footer` and is not used on narrow screens; the click action and reverse-video flash apply to the line.
 
+Fold a space's cards into short rows with `folded_rows`, `fold_toggle_token`, and `start_folded`. `folded_rows` uses the same row syntax as `rows`, and replaces `rows` and `rows_by_agent` for every card in a folded space; rows with no value are hidden. `fold_toggle_token` names the token whose line folds or unfolds its space when clicked. That click does not focus the pane, while the other lines of a card still do. Folding needs both keys; if either is empty or unset, nothing folds. A space whose first card has no value for the toggle token shows no such line, so it cannot be folded. Spaces listed in `start_folded` (by label) begin folded; a click is remembered by space ID, survives a restart for Local, and overrides the list. Folds on other machines last for the client session only.
+
+```toml
+[ui.sidebar.agents]
+folded_rows = [["$title"], ["state_icon", "state_text"]]
+fold_toggle_token = "$title"
+start_folded = ["crowdsourcing"]
+```
+
 Hold agents under the `agents` heading with `pinned`, a list of agent names as shown by the `name` field of `herdr agent list`. Pane IDs are not accepted because they change across restarts and moves. Each name's row sits above a one-line separator and stays put while the rest of the list scrolls. Listed names come first, in this order, in the panel and in agent navigation. An agent view still decides who is listed. If the panel cannot fit the pinned rows, the separator, and two list rows, the pinned rows join the scrolling list instead. Collapsed and mobile lists change order only, without a fixed area. The expanded multi-machine list ignores `pinned`, and agent navigation follows its order. The default is empty; remove a name and reload the config to release it.
 
 ```toml

@@ -62,6 +62,10 @@ impl ClientShellState {
             collapsed_groups: &self.collapsed_groups,
             folded_workspaces: &self.folded_workspaces,
             remote_folded_workspaces: &self.remote_folded_workspaces,
+            agent_folds: super::agent_sidebar::AgentFolds {
+                local: &self.agent_folds,
+                remote: &self.remote_agent_folds,
+            },
             remote_collapsed_groups: &self.remote_collapsed_groups,
             workspace_scroll: &mut self.workspace_scroll,
             agent_scroll: &mut self.agent_scroll,
@@ -99,6 +103,17 @@ impl ClientShellState {
                 &mut self.hits,
             );
         }
+        if let Some(snapshot) = self.snapshot.as_deref() {
+            render::render_footer_band(
+                &mut buffer,
+                layout.footer_bar,
+                snapshot,
+                &self.config,
+                &self.endpoints,
+                &self.active_endpoint_id,
+                &mut self.hits,
+            );
+        }
         self.paint_agent_footer_flash(&mut buffer);
         if !self.config.mouse_capture {
             self.hits = ShellHitMap::default();
@@ -130,7 +145,7 @@ impl ClientShellState {
         }
         render::render_mode_bar(
             &mut buffer,
-            Rect::new(0, 0, cols, rows),
+            Rect::new(0, 0, cols, rows.saturating_sub(layout.footer_bar.height)),
             self.mode,
             None,
             self.endpoint_error.as_deref(),
@@ -221,6 +236,10 @@ impl ClientShellState {
                 collapsed_groups: &self.collapsed_groups,
                 folded_workspaces: &self.folded_workspaces,
                 remote_folded_workspaces: &self.remote_folded_workspaces,
+                agent_folds: super::agent_sidebar::AgentFolds {
+                    local: &self.agent_folds,
+                    remote: &self.remote_agent_folds,
+                },
                 remote_collapsed_groups: &self.remote_collapsed_groups,
                 workspace_scroll: &mut self.workspace_scroll,
                 agent_scroll: &mut self.agent_scroll,

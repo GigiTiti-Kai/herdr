@@ -324,6 +324,7 @@ pub(super) fn render_shell(
             &mut hits,
         );
     }
+    render_footer_gap(buffer, layout.footer_gap);
     render_footer_band(
         buffer,
         layout.footer_bar,
@@ -352,6 +353,15 @@ pub(super) fn render_shell(
         hits.pane_splits.clear();
     }
     hits
+}
+
+/// Blank rows above the footer band: no text, terminal-default colors.
+pub(super) fn render_footer_gap(buffer: &mut Buffer, area: Rect) {
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            buffer[(x, y)].set_symbol(" ").set_style(Style::reset());
+        }
+    }
 }
 
 /// The bottom footer band, drawn on every frame that has a snapshot, including

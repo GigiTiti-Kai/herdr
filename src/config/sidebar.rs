@@ -14,6 +14,21 @@ const MAX_SIDEBAR_ROWS: usize = 16;
 const MAX_AGENT_FOOTER_ROWS: usize = 64;
 const MAX_SIDEBAR_TOKENS_PER_ROW: usize = 16;
 const DEFAULT_SIDEBAR_ROW_GAP: u16 = 0;
+/// A blank row or two is enough to unstick the bar; more only steals pane height.
+const MAX_FOOTER_BAR_GAP: u16 = 2;
+
+fn deserialize_footer_bar_gap<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let gap = u16::deserialize(deserializer)?;
+    if gap > MAX_FOOTER_BAR_GAP {
+        return Err(serde::de::Error::custom(format!(
+            "footer_bar_gap may be at most {MAX_FOOTER_BAR_GAP}"
+        )));
+    }
+    Ok(gap)
+}
 
 fn deserialize_sidebar_rows<'de, D, T>(deserializer: D) -> Result<Vec<Vec<T>>, D::Error>
 where
@@ -480,6 +495,10 @@ pub struct AgentsSidebarConfig {
     /// `bottom` draws the footer as one line across the bottom of the screen
     /// instead of inside the Agent panel. Needs a non-empty `footer`.
     pub footer_position: AgentFooterPositionConfig,
+    /// Fork-only. Blank, uncolored rows left above the bottom footer band
+    /// (0 to 2). Only applies while the band is drawn.
+    #[serde(deserialize_with = "deserialize_footer_bar_gap")]
+    pub footer_bar_gap: u16,
     /// Fork-only. Rows used instead of `rows`/`rows_by_agent` for an agent whose
     /// space is folded. Same syntax as `rows`. Empty disables folding.
     #[serde(deserialize_with = "deserialize_sidebar_rows")]
@@ -549,6 +568,7 @@ impl Default for AgentsSidebarConfig {
             footer: Vec::new(),
             footer_plugin_action: None,
             footer_position: AgentFooterPositionConfig::Sidebar,
+            footer_bar_gap: 0,
             folded_rows: Vec::new(),
             fold_toggle_token: None,
             start_folded: Vec::new(),
@@ -684,6 +704,21 @@ mod tests {
         let empty: crate::config::Config =
             toml::from_str("[ui.sidebar.agents]\nfooter_position = \"bottom\"\n").expect("empty");
         assert!(!empty.ui.sidebar.agents.footer_in_bottom_bar());
+    }
+
+    #[test]
+    fn footer_bar_gap_defaults_to_zero_reads_a_value_and_rejects_too_many() {
+        let parse = |value: &str| {
+            toml::from_str::<crate::config::Config>(&format!(
+                "[ui.sidebar.agents]\nfooter_bar_gap = {value}\n"
+            ))
+        };
+        assert_eq!(AgentsSidebarConfig::default().footer_bar_gap, 0);
+        assert_eq!(parse("1").expect("one").ui.sidebar.agents.footer_bar_gap, 1);
+        assert_eq!(parse("2").expect("two").ui.sidebar.agents.footer_bar_gap, 2);
+        for bad in ["3", "-1", "\"1\""] {
+            assert!(parse(bad).is_err(), "{bad} should be rejected");
+        }
     }
 
     #[test]

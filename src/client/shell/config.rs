@@ -414,6 +414,7 @@ impl ClientShellConfig {
                 mobile_header: Rect::new(0, 0, cols, header_height),
                 pane_surface: Rect::new(0, header_height, cols, rows.saturating_sub(header_height)),
                 footer_bar: Rect::default(),
+                footer_gap: Rect::default(),
             };
         }
 
@@ -433,10 +434,17 @@ impl ClientShellConfig {
         .min(cols.saturating_sub(1));
         // The band is reserved even with no values so pane height does not follow them.
         let footer_height = u16::from(rows > 1 && self.agents.footer_in_bottom_bar());
+        // Give up gap rows before the last pane row.
+        let gap_height = if footer_height > 0 {
+            self.agents.footer_bar_gap.min(rows - footer_height - 1)
+        } else {
+            0
+        };
         let sidebar_rows = rows;
-        let rows = rows - footer_height;
+        let rows = rows - footer_height - gap_height;
         let main = Rect::new(sidebar_width, 0, cols.saturating_sub(sidebar_width), rows);
-        let footer_bar = Rect::new(main.x, rows, main.width, footer_height);
+        let footer_gap = Rect::new(main.x, rows, main.width, gap_height);
+        let footer_bar = Rect::new(main.x, rows + gap_height, main.width, footer_height);
         let show_tab_bar = rows > 1 && !(self.hide_tab_bar_when_single_tab && tab_count == 1);
         let tab_height = u16::from(show_tab_bar);
         let (tab_bar, pane_surface) = match self.tab_bar_position {
@@ -466,6 +474,7 @@ impl ClientShellConfig {
             mobile_header: Rect::default(),
             pane_surface,
             footer_bar,
+            footer_gap,
         }
     }
 
@@ -582,6 +591,59 @@ mod tests {
 
         let narrow = layout(Bottom, true, TabBarPositionConfig::Top, 20);
         assert!(narrow.footer_bar.is_empty());
+    }
+
+    #[test]
+    fn footer_bar_gap_sits_between_the_panes_and_the_band() {
+        let layout = |position, footer: bool, tab_bar, cols, rows, gap| {
+            let mut config = Config::default();
+            config.ui.sidebar.agents.footer_position = position;
+            config.ui.sidebar.agents.footer_bar_gap = gap;
+            if footer {
+                config.ui.sidebar.agents.footer =
+                    vec![vec![crate::config::AgentSidebarToken::Custom("a".into())]];
+            }
+            config.ui.tab_bar_position = tab_bar;
+            ClientShellConfig::from_config(&config).layout(cols, rows, false, 2, 24)
+        };
+        use crate::config::AgentFooterPositionConfig::{Bottom, Sidebar};
+
+        let none = layout(Bottom, true, TabBarPositionConfig::Top, 100, 30, 0);
+        assert!(none.footer_gap.is_empty());
+
+        let top = layout(Bottom, true, TabBarPositionConfig::Top, 100, 30, 1);
+        assert_eq!(top.footer_bar, Rect::new(24, 29, 76, 1));
+        assert_eq!(top.footer_gap, Rect::new(24, 28, 76, 1));
+        assert_eq!(top.tab_bar, Rect::new(24, 0, 76, 1));
+        assert_eq!(top.pane_surface, Rect::new(24, 1, 76, 27));
+        let no_band = layout(Sidebar, true, TabBarPositionConfig::Top, 100, 30, 1);
+        assert_eq!(top.pane_surface.height + 2, no_band.pane_surface.height);
+
+        let bottom = layout(Bottom, true, TabBarPositionConfig::Bottom, 100, 30, 1);
+        assert_eq!(bottom.footer_gap, Rect::new(24, 28, 76, 1));
+        assert_eq!(bottom.tab_bar, Rect::new(24, 27, 76, 1));
+        assert_eq!(bottom.pane_surface, Rect::new(24, 0, 76, 27));
+
+        let two = layout(Bottom, true, TabBarPositionConfig::Top, 100, 30, 2);
+        assert_eq!(two.footer_gap, Rect::new(24, 27, 76, 2));
+
+        // No band, no gap.
+        for l in [
+            layout(Sidebar, true, TabBarPositionConfig::Top, 100, 30, 1),
+            layout(Bottom, false, TabBarPositionConfig::Top, 100, 30, 1),
+            layout(Bottom, true, TabBarPositionConfig::Top, 20, 30, 1),
+        ] {
+            assert!(l.footer_gap.is_empty() && l.footer_bar.is_empty());
+        }
+
+        // Short screens give up gap rows, never the last pane row.
+        let short = layout(Bottom, true, TabBarPositionConfig::Top, 100, 3, 2);
+        assert_eq!(short.footer_bar, Rect::new(24, 2, 76, 1));
+        assert_eq!(short.footer_gap, Rect::new(24, 1, 76, 1));
+        assert_eq!(short.pane_surface.height, 1);
+        let tiny = layout(Bottom, true, TabBarPositionConfig::Top, 100, 2, 2);
+        assert!(tiny.footer_gap.is_empty());
+        assert_eq!(tiny.pane_surface.height, 1);
     }
 
     #[test]

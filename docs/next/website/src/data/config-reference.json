@@ -1095,6 +1095,24 @@
           ]
         },
         {
+          "key": "ui.sidebar.agents.folded_rows",
+          "type": "list of token rows",
+          "default": "[]",
+          "description": "Rows an agent card uses instead of rows and rows_by_agent while its space is folded. Same token syntax, styles, and rules as ui.sidebar.agents.rows; rows with no value are hidden. Folding needs both this and fold_toggle_token; with either empty or unset, clicks never fold."
+        },
+        {
+          "key": "ui.sidebar.agents.fold_toggle_token",
+          "type": "string",
+          "default": "unset",
+          "description": "Token naming the line that folds or unfolds a space when clicked, for example \"$title\". The click toggles the whole space and does not focus the pane; other lines of a card still focus it. A space whose first card has no value for this token has no such line and cannot be folded."
+        },
+        {
+          "key": "ui.sidebar.agents.start_folded",
+          "type": "string[]",
+          "default": "[]",
+          "description": "Space labels drawn folded until you click their fold line. A click is remembered by space ID and overrides this list, so renaming a space or editing the list changes only spaces you have not clicked."
+        },
+        {
           "key": "ui.sidebar.agents.pinned",
           "type": "string[]",
           "default": "[]",

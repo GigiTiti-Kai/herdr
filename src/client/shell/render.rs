@@ -237,6 +237,7 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) collapsed_groups: &'a HashSet<String>,
     pub(super) folded_workspaces: &'a HashSet<String>,
     pub(super) remote_folded_workspaces: &'a HashMap<ClientEndpointId, HashSet<String>>,
+    pub(super) agent_folds: super::agent_sidebar::AgentFolds<'a>,
     pub(super) remote_collapsed_groups: &'a HashMap<ClientEndpointId, HashSet<String>>,
     pub(super) workspace_scroll: &'a mut usize,
     pub(super) agent_scroll: &'a mut usize,
@@ -323,24 +324,15 @@ pub(super) fn render_shell(
             &mut hits,
         );
     }
-    if layout.footer_bar.height > 0 {
-        let footer = if state.endpoints.len() > 1 {
-            super::endpoint_agents::bar_footer_rows(
-                state.endpoints,
-                state.active_endpoint_id,
-                config,
-            )
-        } else {
-            super::agent_sidebar::bar_footer_rows(snapshot, config)
-        };
-        super::agent_sidebar::render_footer_bar(
-            buffer,
-            layout.footer_bar,
-            &footer,
-            config,
-            &mut hits,
-        );
-    }
+    render_footer_band(
+        buffer,
+        layout.footer_bar,
+        snapshot,
+        config,
+        state.endpoints,
+        state.active_endpoint_id,
+        &mut hits,
+    );
     if !config.mouse_capture {
         hits.sidebar_divider = Rect::default();
         hits.sidebar_section_divider = Rect::default();
@@ -353,12 +345,35 @@ pub(super) fn render_shell(
         hits.workspace_tabs.clear();
         hits.agents.clear();
         hits.endpoint_agents.clear();
+        hits.agent_fold_toggles.clear();
         hits.tab_scroll_left = Rect::default();
         hits.tab_scroll_right = Rect::default();
         hits.new_tab = Rect::default();
         hits.pane_splits.clear();
     }
     hits
+}
+
+/// The bottom footer band, drawn on every frame that has a snapshot, including
+/// the unavailable one, so it does not blink out while the pane surface is rebuilt.
+pub(super) fn render_footer_band(
+    buffer: &mut Buffer,
+    area: Rect,
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    endpoints: &[ClientShellEndpoint],
+    active_endpoint_id: &ClientEndpointId,
+    hits: &mut ShellHitMap,
+) {
+    if area.height == 0 {
+        return;
+    }
+    let footer = if endpoints.len() > 1 {
+        super::endpoint_agents::bar_footer_rows(endpoints, active_endpoint_id, config)
+    } else {
+        super::agent_sidebar::bar_footer_rows(snapshot, config)
+    };
+    super::agent_sidebar::render_footer_bar(buffer, area, &footer, config, hits);
 }
 
 pub(super) fn put_right_text(buffer: &mut Buffer, area: Rect, y: u16, text: &str, style: Style) {

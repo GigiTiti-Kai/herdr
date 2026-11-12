@@ -68,20 +68,59 @@ pub(crate) struct AgentTokenContext<'a> {
     pub(crate) tokens: &'a std::collections::HashMap<String, String>,
 }
 
+#[cfg(test)]
 pub(crate) fn agent_rows(
     config: &AgentsSidebarConfig,
     context: AgentTokenContext<'_>,
     state_text: &str,
 ) -> Vec<Vec<ResolvedToken>> {
-    let configured = config.rows_for_agent(context.canonical_agent);
+    agent_rows_folded(config, context, state_text, false).rows
+}
+
+/// A card's rows plus the index of the row holding the fold-toggle token, if
+/// folding is enabled and that token resolved for this agent.
+pub(crate) struct AgentRows {
+    pub(crate) rows: Vec<Vec<ResolvedToken>>,
+    pub(crate) toggle_row: Option<usize>,
+}
+
+/// `folded` swaps in `folded_rows`; it is ignored unless folding is enabled.
+pub(crate) fn agent_rows_folded(
+    config: &AgentsSidebarConfig,
+    context: AgentTokenContext<'_>,
+    state_text: &str,
+    folded: bool,
+) -> AgentRows {
+    let fold_enabled = config.fold_enabled();
+    let configured = if folded && fold_enabled {
+        &config.folded_rows
+    } else {
+        config.rows_for_agent(context.canonical_agent)
+    };
+    let toggle = config.fold_toggle_name();
     let explicit_shells = configured.iter().flatten().any(|token| {
         matches!(token.parts().0, AgentSidebarToken::Custom(name) if name == "background_shells")
     });
-    let mut rows: Vec<Vec<ResolvedToken>> = configured
-        .iter()
-        .map(|row| resolve_agent_row(row, &context, state_text))
-        .filter(|resolved| !resolved.is_empty())
-        .collect();
+    let mut toggle_row = None;
+    let mut rows: Vec<Vec<ResolvedToken>> = Vec::new();
+    for row in configured {
+        let resolved = resolve_agent_row(row, &context, state_text);
+        if resolved.is_empty() {
+            continue;
+        }
+        if toggle_row.is_none()
+            && toggle.is_some_and(|toggle| {
+                row.iter().any(|token| {
+                    matches!(token.parts().0, AgentSidebarToken::Custom(name) if name == toggle)
+                        && !resolve_agent_row(std::slice::from_ref(token), &context, state_text)
+                            .is_empty()
+                })
+            })
+        {
+            toggle_row = Some(rows.len());
+        }
+        rows.push(resolved);
+    }
     if !explicit_shells {
         if let Some(count) = context
             .tokens
@@ -108,7 +147,7 @@ pub(crate) fn agent_rows(
             }
         }
     }
-    rows
+    AgentRows { rows, toggle_row }
 }
 
 /// One entry per configured footer row, resolved against this agent only and
@@ -999,5 +1038,58 @@ rows = [[{ token = "$load", rules = [{ lt = 50, hide = true }] }], ["workspace"]
                 "2 changes".into()
             ))]]
         );
+    }
+
+    #[test]
+    fn folded_rows_replace_rows_and_mark_the_toggle_row_after_dropped_rows() {
+        let config: AgentsSidebarConfig = toml::from_str(
+            r#"
+rows = [["$gone"], ["$title"], ["state_text"], ["agent"]]
+folded_rows = [["$gone"], ["state_text", "$title"]]
+fold_toggle_token = "$title"
+
+[rows_by_agent]
+pi = [["$gone"], ["state_text"], ["$title"]]
+"#,
+        )
+        .unwrap();
+        let mut entry = entry();
+        entry.tokens.insert("title".into(), "space".into());
+
+        let open = agent_rows_folded(&config, context(&entry), "idle", false);
+        assert_eq!(open.rows.len(), 2, "rows_by_agent wins over rows");
+        assert_eq!(
+            open.toggle_row,
+            Some(1),
+            "a dropped row does not shift the mark"
+        );
+
+        let folded = agent_rows_folded(&config, context(&entry), "idle", true);
+        assert_eq!(folded.rows.len(), 1);
+        assert_eq!(folded.toggle_row, Some(0));
+
+        entry.tokens.clear();
+        assert_eq!(
+            agent_rows_folded(&config, context(&entry), "idle", true).toggle_row,
+            None,
+            "no title value, no toggle line"
+        );
+    }
+
+    #[test]
+    fn folding_is_inert_without_both_folded_rows_and_a_toggle_token() {
+        let mut entry = entry();
+        entry.tokens.insert("title".into(), "space".into());
+        for toml in [
+            "rows = [[\"$title\"], [\"agent\"]]\nfolded_rows = [[\"state_text\"]]\n",
+            "rows = [[\"$title\"], [\"agent\"]]\nfold_toggle_token = \"$title\"\n",
+        ] {
+            let config: AgentsSidebarConfig = toml::from_str(toml).unwrap();
+            for folded in [false, true] {
+                let result = agent_rows_folded(&config, context(&entry), "idle", folded);
+                assert_eq!(result.rows.len(), 2, "{toml} folded={folded}");
+                assert_eq!(result.toggle_row, None);
+            }
+        }
     }
 }

@@ -14,6 +14,7 @@ impl App {
         let config = &self.state.sidebar_agents;
         std::iter::once(&config.rows)
             .chain(std::iter::once(&config.footer))
+            .chain(std::iter::once(&config.folded_rows))
             .chain(config.rows_by_agent.values())
             .flatten()
             .flatten()
@@ -236,6 +237,12 @@ mod tests {
         app.state.sidebar_agents.rows_by_agent.clear();
         assert!(!app.terminal_title_sidebar_changed(&spinner_only));
         app.state.sidebar_agents.footer =
+            vec![vec![crate::config::AgentSidebarToken::TerminalTitle]];
+        assert!(app.terminal_title_sidebar_changed(&spinner_only));
+
+        app.state.sidebar_agents.footer.clear();
+        assert!(!app.terminal_title_sidebar_changed(&spinner_only));
+        app.state.sidebar_agents.folded_rows =
             vec![vec![crate::config::AgentSidebarToken::TerminalTitle]];
         assert!(app.terminal_title_sidebar_changed(&spinner_only));
     }

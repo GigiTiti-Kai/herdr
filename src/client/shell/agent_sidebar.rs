@@ -15,9 +15,68 @@ pub(super) struct AgentRow {
     pub(super) status: crate::api::schema::AgentStatus,
     pub(super) focused: bool,
     pub(super) pinned: bool,
+    pub(super) workspace_id: String,
+    /// Whether this card's space is drawn with `folded_rows`.
+    pub(super) folded: bool,
+    /// Index into `rows` of the line that folds or unfolds this space when clicked.
+    pub(super) toggle_row: Option<usize>,
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
     /// One entry per configured footer row (empty when this agent resolves none).
     pub(super) footer: Vec<Vec<crate::ui::ResolvedToken>>,
+}
+
+/// The user's click-chosen Agents-panel folds, Local and per remote endpoint.
+#[derive(Clone, Copy)]
+pub(super) struct AgentFolds<'a> {
+    pub(super) local: &'a HashMap<String, bool>,
+    pub(super) remote: &'a HashMap<ClientEndpointId, HashMap<String, bool>>,
+}
+
+impl<'a> AgentFolds<'a> {
+    pub(super) fn for_endpoint(
+        self,
+        endpoint_id: &ClientEndpointId,
+    ) -> Option<&'a HashMap<String, bool>> {
+        if endpoint_id.is_local() {
+            Some(self.local)
+        } else {
+            self.remote.get(endpoint_id)
+        }
+    }
+}
+
+/// A click-chosen fold wins; otherwise a space starts folded when its label is listed.
+fn workspace_folded(
+    config: &ClientShellConfig,
+    overrides: Option<&HashMap<String, bool>>,
+    workspace_id: &str,
+    label: &str,
+) -> bool {
+    config.agents.fold_enabled()
+        && overrides
+            .and_then(|folds| folds.get(workspace_id))
+            .copied()
+            .unwrap_or_else(|| config.agents.start_folded.iter().any(|name| name == label))
+}
+
+/// Record a click target on the card's fold-toggle line, if it has one on screen.
+pub(super) fn push_fold_hit(
+    hits: &mut ShellHitMap,
+    rect: Rect,
+    endpoint_id: &ClientEndpointId,
+    row: &AgentRow,
+) {
+    if let Some(index) = row
+        .toggle_row
+        .filter(|index| *index < usize::from(rect.height))
+    {
+        hits.agent_fold_toggles.push((
+            Rect::new(rect.x, rect.y + index as u16, rect.width, 1),
+            endpoint_id.clone(),
+            row.workspace_id.clone(),
+            row.folded,
+        ));
+    }
 }
 
 pub(super) fn ordered_agent_pane_ids(
@@ -67,6 +126,8 @@ pub(super) fn render_agent_panel(
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
     agent_scroll: &mut usize,
+    endpoint_id: &ClientEndpointId,
+    folds: AgentFolds<'_>,
     hits: &mut ShellHitMap,
 ) {
     if !render_agent_panel_header(
@@ -79,7 +140,7 @@ pub(super) fn render_agent_panel(
         return;
     }
 
-    let rows = agent_rows(snapshot, config, None);
+    let rows = agent_rows(snapshot, config, None, folds.for_endpoint(endpoint_id));
     let footer = if config.agents.footer_in_bottom_bar() {
         Vec::new()
     } else {
@@ -96,7 +157,7 @@ pub(super) fn render_agent_panel(
     let (fixed, listed) = rows.split_at(if fits { pinned } else { 0 });
     let mut list_area = area;
     if !fixed.is_empty() {
-        render_pinned_agents(buffer, area, fixed, config, hits);
+        render_pinned_agents(buffer, area, fixed, config, endpoint_id, hits);
         // render_agent_list adds its own header offset, so this lands under the separator.
         let shift = pinned_height as u16 + 1;
         list_area.y += shift;
@@ -119,6 +180,7 @@ pub(super) fn render_agent_panel(
         |row| row.rows.len(),
         |buffer, rect, row, hits| {
             hits.agents.push((rect, row.pane_id.clone()));
+            push_fold_hit(hits, rect, endpoint_id, row);
             render_agent_row(buffer, rect, row, config);
         },
     );
@@ -144,7 +206,7 @@ pub(super) fn bar_footer_rows(
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
 ) -> Vec<Vec<crate::ui::ResolvedToken>> {
-    footer_from_rows(snapshot, config, &agent_rows(snapshot, config, None))
+    footer_from_rows(snapshot, config, &agent_rows(snapshot, config, None, None))
 }
 
 /// Draw the footer rows side by side on one line: `row │ row`, cut on the right.
@@ -203,6 +265,7 @@ fn render_pinned_agents(
     area: Rect,
     rows: &[AgentRow],
     config: &ClientShellConfig,
+    endpoint_id: &ClientEndpointId,
     hits: &mut ShellHitMap,
 ) {
     let mut y = area.y + AGENT_LIST_TOP;
@@ -212,6 +275,7 @@ fn render_pinned_agents(
         }
         let rect = Rect::new(area.x, y, area.width, row.rows.len().max(1) as u16);
         hits.agents.push((rect, row.pane_id.clone()));
+        push_fold_hit(hits, rect, endpoint_id, row);
         render_agent_row(buffer, rect, row, config);
         y = rect.bottom();
     }
@@ -436,10 +500,11 @@ pub(super) fn agent_rows(
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
     machine: Option<&str>,
+    folds: Option<&HashMap<String, bool>>,
 ) -> Vec<AgentRow> {
     ordered_agent_pane_ids(snapshot, config.agent_panel_sort, &config.agents.pinned)
         .into_iter()
-        .filter_map(|pane_id| agent_row(snapshot, &pane_id, config, machine))
+        .filter_map(|pane_id| agent_row(snapshot, &pane_id, config, machine, folds))
         .collect()
 }
 
@@ -448,6 +513,7 @@ pub(super) fn agent_row(
     pane_id: &str,
     config: &ClientShellConfig,
     machine: Option<&str>,
+    folds: Option<&HashMap<String, bool>>,
 ) -> Option<AgentRow> {
     let agent = snapshot
         .agents
@@ -506,13 +572,18 @@ pub(super) fn agent_row(
     };
     let footer =
         crate::ui::sidebar_agent_footer_candidates(&config.agents.footer, &context, state_text);
-    let rows = crate::ui::sidebar_agent_rows(&config.agents, context, state_text);
+    let folded = workspace_folded(config, folds, &workspace.workspace_id, &workspace.label);
+    let crate::ui::AgentRows { rows, toggle_row } =
+        crate::ui::sidebar_agent_rows_folded(&config.agents, context, state_text, folded);
     Some(AgentRow {
         pane_id: agent.pane_id.clone(),
         status: agent.agent_status,
         focused: agent.focused,
         pinned: pinned_rank(agent.name.as_deref(), &config.agents.pinned)
             < config.agents.pinned.len(),
+        workspace_id: workspace.workspace_id.clone(),
+        folded,
+        toggle_row,
         rows,
         footer,
     })
@@ -651,6 +722,9 @@ mod tests {
             status,
             focused: true,
             pinned: false,
+            workspace_id: String::new(),
+            folded: false,
+            toggle_row: None,
             rows,
             footer: Vec::new(),
         };

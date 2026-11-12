@@ -28,6 +28,10 @@ pub(super) struct ClientChromePreferences {
     pub(super) collapsed_groups: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) folded_workspaces: Vec<String>,
+    /// Fork-only: Agents-panel folds the user chose by clicking (space ID ->
+    /// folded). Spaces without an entry follow `start_folded`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(super) agent_folds: std::collections::BTreeMap<String, bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) remote_collapsed_groups: Vec<ClientRemoteCollapsedGroups>,
 }
@@ -122,6 +126,24 @@ mod tests {
 
         assert_eq!(preferences.collapsed_groups, ["/repo"]);
         assert!(preferences.remote_collapsed_groups.is_empty());
+    }
+
+    #[test]
+    fn agent_folds_round_trip_and_default_to_empty() {
+        let legacy: ClientChromePreferences =
+            serde_json::from_str(r#"{"folded_workspaces":["ws_1"]}"#).expect("legacy preferences");
+        assert!(legacy.agent_folds.is_empty());
+
+        let saved = ClientChromePreferences {
+            agent_folds: [("ws_1".to_owned(), true), ("ws_2".to_owned(), false)].into(),
+            ..ClientChromePreferences::default()
+        };
+        let json = serde_json::to_string(&saved).expect("encode");
+        let restored: ClientChromePreferences = serde_json::from_str(&json).expect("decode");
+        assert_eq!(restored.agent_folds, saved.agent_folds);
+        assert!(!serde_json::to_string(&ClientChromePreferences::default())
+            .expect("encode default")
+            .contains("agent_folds"));
     }
 
     #[test]

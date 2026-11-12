@@ -63,6 +63,11 @@ impl ClientShellState {
                 .then_some(self.config.agent_panel_sort),
             collapsed_groups,
             folded_workspaces,
+            agent_folds: self
+                .agent_folds
+                .iter()
+                .map(|(workspace_id, folded)| (workspace_id.clone(), *folded))
+                .collect(),
             remote_collapsed_groups,
         };
         if let Err(error) = preferences::store(path, preferences) {

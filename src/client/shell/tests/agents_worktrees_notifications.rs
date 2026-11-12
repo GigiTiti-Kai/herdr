@@ -3103,3 +3103,55 @@ fn agent_folds_are_kept_per_machine_and_only_local_is_saved() {
     );
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn snapshot_forgets_saved_agent_folds_of_missing_spaces_only_when_safe() {
+    use crate::client::endpoint::ClientEndpointStatus;
+    let path = std::env::temp_dir().join(format!(
+        "herdr-agent-fold-prune-{}.json",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&path);
+    let mut state = fold_shell_from(&fold_config(|_| {}), Some(path.clone()));
+    let seed = |state: &mut ClientShellState| {
+        state.agent_folds = [("ws_1", true), ("ws_2", false), ("ws_gone", true)]
+            .map(|(id, folded)| (id.to_owned(), folded))
+            .into();
+    };
+    state.folded_workspaces.insert("ws_gone".into());
+    state.collapsed_groups.insert("group_gone".into());
+
+    // Not Online, or no workspaces yet: nothing is dropped.
+    seed(&mut state);
+    state.set_endpoint_status(&ClientEndpointId::Local, ClientEndpointStatus::Reconnecting);
+    state.set_snapshot(Box::new(fold_snapshot()));
+    assert_eq!(state.agent_folds.len(), 3, "offline keeps every fold");
+    state.set_endpoint_status(&ClientEndpointId::Local, ClientEndpointStatus::Online);
+    let mut empty = fold_snapshot();
+    empty.workspaces.clear();
+    state.set_snapshot(Box::new(empty));
+    assert_eq!(
+        state.agent_folds.len(),
+        3,
+        "empty workspaces keep every fold"
+    );
+    assert!(preferences::load(&path).is_none_or(|saved| saved.agent_folds.is_empty()));
+
+    // Online with workspaces: only the missing id goes, and the file follows.
+    state.set_snapshot(Box::new(fold_snapshot()));
+    assert_eq!(
+        state.agent_folds,
+        [("ws_1".to_owned(), true), ("ws_2".to_owned(), false)].into()
+    );
+    let saved = preferences::load(&path).expect("saved preferences");
+    assert_eq!(
+        saved.agent_folds,
+        [("ws_1".to_owned(), true), ("ws_2".to_owned(), false)].into()
+    );
+    // The Spaces panel's own folds are untouched.
+    assert!(state.folded_workspaces.contains("ws_gone"));
+    assert!(state.collapsed_groups.contains("group_gone"));
+    assert_eq!(saved.folded_workspaces, ["ws_gone".to_owned()]);
+    assert_eq!(saved.collapsed_groups, ["group_gone".to_owned()]);
+    let _ = std::fs::remove_file(path);
+}

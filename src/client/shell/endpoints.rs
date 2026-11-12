@@ -653,6 +653,33 @@ impl ClientShellState {
                 endpoint.agent_view_projection = None;
             }
         }
+        self.forget_missing_agent_folds(index);
+    }
+
+    /// Workspace ids are reused after a restart, so drop saved Agents-panel folds of
+    /// spaces that no longer exist. Runs only when a Local snapshot arrives.
+    fn forget_missing_agent_folds(&mut self, index: usize) {
+        let endpoint = &self.endpoints[index];
+        if !endpoint.endpoint_id.is_local() || endpoint.status != ClientEndpointStatus::Online {
+            return;
+        }
+        let Some(snapshot) = endpoint.snapshot.as_deref() else {
+            return;
+        };
+        // An empty list may be a transient state such as startup, not "all spaces gone".
+        if snapshot.workspaces.is_empty() {
+            return;
+        }
+        let before = self.agent_folds.len();
+        self.agent_folds.retain(|id, _| {
+            snapshot
+                .workspaces
+                .iter()
+                .any(|workspace| &workspace.workspace_id == id)
+        });
+        if self.agent_folds.len() != before {
+            self.persist_chrome_preferences(&mut ClientShellInput::default());
+        }
     }
 
     pub(crate) fn acknowledge_active_surface_agents(&mut self, surface: &PaneSurfaceFrame) -> bool {

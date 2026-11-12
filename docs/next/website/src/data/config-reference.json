@@ -1085,6 +1085,16 @@
           "description": "Plugin action run when the visible Agent panel footer is clicked, written like the command of a plugin_action key binding (for example \"example.usage.refresh\"). It runs on the selected machine; the sidebar collapse toggle keeps its own click. The footer briefly shows in reverse video on a click. Unset or blank leaves the footer unclickable."
         },
         {
+          "key": "ui.sidebar.agents.footer_position",
+          "type": "enum",
+          "default": "\"sidebar\"",
+          "description": "Where the footer is drawn: \"sidebar\" pins it to the bottom of the Agent panel, \"bottom\" draws it as one line along the bottom of the screen, right of the sidebar, with rows side by side separated by │. The line is reserved only when footer is not empty and is not used on narrow screens.",
+          "values": [
+            "sidebar",
+            "bottom"
+          ]
+        },
+        {
           "key": "ui.sidebar.agents.pinned",
           "type": "string[]",
           "default": "[]",

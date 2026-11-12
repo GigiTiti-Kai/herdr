@@ -323,6 +323,24 @@ pub(super) fn render_shell(
             &mut hits,
         );
     }
+    if layout.footer_bar.height > 0 {
+        let footer = if state.endpoints.len() > 1 {
+            super::endpoint_agents::bar_footer_rows(
+                state.endpoints,
+                state.active_endpoint_id,
+                config,
+            )
+        } else {
+            super::agent_sidebar::bar_footer_rows(snapshot, config)
+        };
+        super::agent_sidebar::render_footer_bar(
+            buffer,
+            layout.footer_bar,
+            &footer,
+            config,
+            &mut hits,
+        );
+    }
     if !config.mouse_capture {
         hits.sidebar_divider = Rect::default();
         hits.sidebar_section_divider = Rect::default();

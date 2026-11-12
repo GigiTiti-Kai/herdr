@@ -60,6 +60,9 @@ pub(super) struct ClientShellLayout {
     pub tab_bar: Rect,
     pub mobile_header: Rect,
     pub pane_surface: Rect,
+    /// One-line band under the pane surface for the agent footer; empty unless
+    /// `footer_position = "bottom"` with a non-empty footer.
+    pub footer_bar: Rect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

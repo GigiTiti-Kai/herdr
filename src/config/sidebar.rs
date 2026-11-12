@@ -434,6 +434,17 @@ where
     Ok(rows_by_agent)
 }
 
+/// Where the Agent panel footer is drawn (fork-only `footer_position`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentFooterPositionConfig {
+    /// Pinned to the bottom of the expanded Agent panel.
+    #[default]
+    Sidebar,
+    /// A one-line band along the bottom of the screen, right of the sidebar.
+    Bottom,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AgentsSidebarConfig {
@@ -453,6 +464,9 @@ pub struct AgentsSidebarConfig {
     /// the footer unclickable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub footer_plugin_action: Option<String>,
+    /// `bottom` draws the footer as one line across the bottom of the screen
+    /// instead of inside the Agent panel. Needs a non-empty `footer`.
+    pub footer_position: AgentFooterPositionConfig,
     /// Agent names (the `name` of `herdr agent list`) held above the scrolling
     /// Agent list and moved to the front of the panel order, in this order.
     pub pinned: Vec<String>,
@@ -463,6 +477,11 @@ impl AgentsSidebarConfig {
         agent
             .and_then(|agent| self.rows_by_agent.get(crate::detect::agent_label(agent)))
             .unwrap_or(&self.rows)
+    }
+
+    /// True when the footer is drawn as the bottom band, not in the Agent panel.
+    pub(crate) fn footer_in_bottom_bar(&self) -> bool {
+        self.footer_position == AgentFooterPositionConfig::Bottom && !self.footer.is_empty()
     }
 
     /// The footer's click action, or `None` when the footer is inert.
@@ -490,6 +509,7 @@ impl Default for AgentsSidebarConfig {
             row_gap: DEFAULT_SIDEBAR_ROW_GAP,
             footer: Vec::new(),
             footer_plugin_action: None,
+            footer_position: AgentFooterPositionConfig::Sidebar,
             pinned: Vec::new(),
         }
     }
@@ -554,7 +574,31 @@ mod tests {
         assert!(config.agents.footer.is_empty());
         assert_eq!(config.agents.footer_plugin_action, None);
         assert_eq!(config.agents.footer_click_action(), None);
+        assert_eq!(
+            config.agents.footer_position,
+            AgentFooterPositionConfig::Sidebar
+        );
         assert!(config.agents.pinned.is_empty());
+    }
+
+    #[test]
+    fn footer_position_reads_bottom_and_rejects_unknown_values() {
+        let parse = |value: &str| {
+            toml::from_str::<crate::config::Config>(&format!(
+                "[ui.sidebar.agents]\nfooter = [[\"$a\"]]\nfooter_position = {value}\n"
+            ))
+        };
+        let agents = parse("\"bottom\"").expect("bottom").ui.sidebar.agents;
+        assert_eq!(agents.footer_position, AgentFooterPositionConfig::Bottom);
+        assert!(agents.footer_in_bottom_bar());
+        let sidebar = parse("\"sidebar\"").expect("sidebar").ui.sidebar.agents;
+        assert!(!sidebar.footer_in_bottom_bar());
+        assert!(parse("\"left\"").is_err());
+        assert!(parse("1").is_err());
+        // An empty footer never claims the band.
+        let empty: crate::config::Config =
+            toml::from_str("[ui.sidebar.agents]\nfooter_position = \"bottom\"\n").expect("empty");
+        assert!(!empty.ui.sidebar.agents.footer_in_bottom_bar());
     }
 
     #[test]

@@ -968,6 +968,7 @@ fn footer_shell_with(configure: impl FnOnce(&mut Config)) -> ClientShellState {
                 ("reset", "2d2h"),
                 ("x", "X1"),
                 ("y", FOOTER_LONG),
+                ("gap", "\u{2800}"),
             ],
         ),
         footer_agent(
@@ -2673,4 +2674,77 @@ fn frame_text(frame: &crate::protocol::FrameData) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Footer rows `title`, a blank spacer, then `x reset`: the band reads `quota │ X1 2d2h`.
+fn bottom_footer_shell(action: Option<&str>) -> ClientShellState {
+    footer_shell_with(|config| {
+        let custom = |name: &str| crate::config::AgentSidebarToken::Custom(name.into());
+        let agents = &mut config.ui.sidebar.agents;
+        agents.footer = vec![
+            vec![custom("title")],
+            vec![custom("gap")],
+            vec![custom("x"), custom("reset")],
+        ];
+        agents.footer_position = crate::config::AgentFooterPositionConfig::Bottom;
+        agents.footer_plugin_action = action.map(str::to_owned);
+    })
+}
+
+#[test]
+fn bottom_footer_draws_one_line_band_and_leaves_the_agent_panel_alone() {
+    let mut state = bottom_footer_shell(None);
+    let frame = state.compose(106, 30).expect("band frame");
+    let bar = state.layout(106, 30).footer_bar;
+    assert_eq!((bar.y, bar.bottom(), bar.right()), (29, 30, 106));
+
+    assert_eq!(
+        sidebar_line(&frame, bar, bar.y),
+        "quota │ X1 2d2h",
+        "rows join with a divider and the U+2800 spacer row is skipped"
+    );
+    let sidebar = state.layout(106, 30).sidebar;
+    assert!(
+        (0..30).all(|y| !sidebar_line(&frame, sidebar, y).contains("quota")),
+        "the Agent panel draws no footer"
+    );
+    assert_eq!(
+        state.hits.agent_body.bottom(),
+        state.hits.sidebar_toggle.bottom(),
+        "the list takes back the footer rows"
+    );
+
+    state.sidebar_collapsed = true;
+    let collapsed = state.compose(106, 30).expect("collapsed frame");
+    let bar = state.layout(106, 30).footer_bar;
+    assert!(bar.x > 0);
+    assert_eq!(sidebar_line(&collapsed, bar, bar.y), "quota │ X1 2d2h");
+}
+
+#[test]
+fn bottom_footer_click_runs_the_plugin_action_and_flashes_the_band() {
+    let mut state = bottom_footer_shell(Some("herdr-agent-quota.refresh"));
+    state.compose(106, 30).expect("band frame");
+    let bar = state.layout(106, 30).footer_bar;
+    assert_eq!(state.hits.agent_footer, bar);
+
+    let click = left_click(&mut state, bar.x + 1, bar.y);
+    let [ClientShellAction::Endpoint { request, .. }] = &click.actions[..] else {
+        panic!("expected one endpoint request, got {:?}", click.actions);
+    };
+    let crate::api::schema::Method::PluginActionInvoke(params) = &request.method else {
+        panic!("expected plugin.action.invoke");
+    };
+    assert_eq!(params.action_id, "herdr-agent-quota.refresh");
+
+    let flashing = state.compose(106, 30).expect("flash frame");
+    assert!((bar.x..bar.right()).all(|x| {
+        flashing.cells[bar.y as usize * flashing.width as usize + x as usize].modifier
+            & Modifier::REVERSED.bits()
+            != 0
+    }));
+
+    let mut inert = bottom_footer_shell(None);
+    inert.compose(106, 30).expect("band frame");
+    assert_eq!(inert.hits.agent_footer, Rect::default());
 }

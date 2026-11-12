@@ -63,17 +63,11 @@ pub(super) fn render_expanded(
     }
     // The expanded multi-machine list ignores `pinned`: only the rail and mobile reorder.
     let rows = agent_rows(endpoints, active_endpoint_id, config, &[]);
-    let footer = crate::ui::sidebar_agent_footer_rows(
-        &config.agents.footer,
-        // Stale endpoints hold frozen values that would look live in the footer.
-        rows.iter()
-            .filter(|row| !row.stale)
-            .map(|row| row.agent.footer.as_slice()),
-        super::aggregate_navigation::cached_endpoint_snapshots(endpoints)
-            .filter(|endpoint| !endpoint.stale())
-            .flat_map(|endpoint| &endpoint.snapshot.workspaces)
-            .map(|workspace| workspace.tokens.as_slice()),
-    );
+    let footer = if config.agents.footer_in_bottom_bar() {
+        Vec::new()
+    } else {
+        footer_from_rows(endpoints, config, &rows)
+    };
     super::agent_sidebar::render_agent_list(
         buffer,
         area,
@@ -140,6 +134,34 @@ struct EndpointAgentRow {
     machine_label: String,
     stale: bool,
     agent: super::agent_sidebar::AgentRow,
+}
+
+fn footer_from_rows(
+    endpoints: &[ClientShellEndpoint],
+    config: &ClientShellConfig,
+    rows: &[EndpointAgentRow],
+) -> Vec<Vec<crate::ui::ResolvedToken>> {
+    crate::ui::sidebar_agent_footer_rows(
+        &config.agents.footer,
+        // Stale endpoints hold frozen values that would look live in the footer.
+        rows.iter()
+            .filter(|row| !row.stale)
+            .map(|row| row.agent.footer.as_slice()),
+        super::aggregate_navigation::cached_endpoint_snapshots(endpoints)
+            .filter(|endpoint| !endpoint.stale())
+            .flat_map(|endpoint| &endpoint.snapshot.workspaces)
+            .map(|workspace| workspace.tokens.as_slice()),
+    )
+}
+
+/// The footer for the bottom band, picked the way the expanded list picks it.
+pub(super) fn bar_footer_rows(
+    endpoints: &[ClientShellEndpoint],
+    active_endpoint_id: &ClientEndpointId,
+    config: &ClientShellConfig,
+) -> Vec<Vec<crate::ui::ResolvedToken>> {
+    let rows = agent_rows(endpoints, active_endpoint_id, config, &[]);
+    footer_from_rows(endpoints, config, &rows)
 }
 
 fn agent_rows(

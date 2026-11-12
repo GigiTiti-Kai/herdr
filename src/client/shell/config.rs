@@ -408,6 +408,7 @@ impl ClientShellConfig {
                 tab_bar: Rect::default(),
                 mobile_header: Rect::new(0, 0, cols, header_height),
                 pane_surface: Rect::new(0, header_height, cols, rows.saturating_sub(header_height)),
+                footer_bar: Rect::default(),
             };
         }
 
@@ -425,7 +426,12 @@ impl ClientShellConfig {
             sidebar_width.clamp(min, max)
         }
         .min(cols.saturating_sub(1));
+        // The band is reserved even with no values so pane height does not follow them.
+        let footer_height = u16::from(rows > 1 && self.agents.footer_in_bottom_bar());
+        let sidebar_rows = rows;
+        let rows = rows - footer_height;
         let main = Rect::new(sidebar_width, 0, cols.saturating_sub(sidebar_width), rows);
+        let footer_bar = Rect::new(main.x, rows, main.width, footer_height);
         let show_tab_bar = rows > 1 && !(self.hide_tab_bar_when_single_tab && tab_count == 1);
         let tab_height = u16::from(show_tab_bar);
         let (tab_bar, pane_surface) = match self.tab_bar_position {
@@ -450,10 +456,11 @@ impl ClientShellConfig {
         };
 
         ClientShellLayout {
-            sidebar: Rect::new(0, 0, sidebar_width, rows),
+            sidebar: Rect::new(0, 0, sidebar_width, sidebar_rows),
             tab_bar,
             mobile_header: Rect::default(),
             pane_surface,
+            footer_bar,
         }
     }
 
@@ -494,7 +501,7 @@ mod tests {
         next.ui.tab_bar_position = TabBarPositionConfig::Bottom;
         next.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
         next.ui.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
-        next.ui.sidebar.agents = toml::from_str("rows = [[{ token = 'machine', rules = [{ equals = 'Local', bold = true }] }]]\nrow_gap = 2").unwrap();
+        next.ui.sidebar.agents = toml::from_str("rows = [[{ token = 'machine', rules = [{ equals = 'Local', bold = true }] }]]\nrow_gap = 2\nfooter_position = 'bottom'").unwrap();
         next.keys.prefix = crate::config::BindingConfig::one("ctrl+a");
 
         let diagnostics = shell.apply_live_config(&next, &[], &[]);
@@ -511,6 +518,10 @@ mod tests {
             crate::config::StatusIndicatorStyle::Symbols
         );
         assert_eq!(shell.agents.row_gap, 2);
+        assert_eq!(
+            shell.agents.footer_position,
+            crate::config::AgentFooterPositionConfig::Bottom
+        );
         assert_eq!(
             shell.agents.rows[0][0]
                 .style_for_value("Local")
@@ -529,6 +540,43 @@ mod tests {
             shell.keybinds.prefix,
             vec![(KeyCode::Char('a'), KeyModifiers::CONTROL)]
         );
+    }
+
+    #[test]
+    fn bottom_footer_band_takes_the_last_row_right_of_the_sidebar() {
+        let layout = |position, footer: bool, tab_bar, cols| {
+            let mut config = Config::default();
+            config.ui.sidebar.agents.footer_position = position;
+            if footer {
+                config.ui.sidebar.agents.footer =
+                    vec![vec![crate::config::AgentSidebarToken::Custom("a".into())]];
+            }
+            config.ui.tab_bar_position = tab_bar;
+            ClientShellConfig::from_config(&config).layout(cols, 30, false, 2, 24)
+        };
+        use crate::config::AgentFooterPositionConfig::{Bottom, Sidebar};
+
+        let plain = layout(Sidebar, true, TabBarPositionConfig::Top, 100);
+        assert!(plain.footer_bar.is_empty());
+        assert_eq!(plain.pane_surface.height, 29);
+
+        let top = layout(Bottom, true, TabBarPositionConfig::Top, 100);
+        assert_eq!(top.footer_bar, Rect::new(24, 29, 76, 1));
+        assert_eq!(top.tab_bar, Rect::new(24, 0, 76, 1));
+        assert_eq!(top.pane_surface, Rect::new(24, 1, 76, 28));
+        assert_eq!(top.sidebar.height, 30, "the sidebar keeps the full height");
+
+        let bottom = layout(Bottom, true, TabBarPositionConfig::Bottom, 100);
+        assert_eq!(bottom.footer_bar, Rect::new(24, 29, 76, 1));
+        assert_eq!(bottom.tab_bar, Rect::new(24, 28, 76, 1));
+        assert_eq!(bottom.pane_surface, Rect::new(24, 0, 76, 28));
+
+        let empty = layout(Bottom, false, TabBarPositionConfig::Top, 100);
+        assert!(empty.footer_bar.is_empty());
+        assert_eq!(empty.pane_surface, plain.pane_surface);
+
+        let narrow = layout(Bottom, true, TabBarPositionConfig::Top, 20);
+        assert!(narrow.footer_bar.is_empty());
     }
 
     #[test]

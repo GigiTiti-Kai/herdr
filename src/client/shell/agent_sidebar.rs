@@ -80,14 +80,11 @@ pub(super) fn render_agent_panel(
     }
 
     let rows = agent_rows(snapshot, config, None);
-    let footer = crate::ui::sidebar_agent_footer_rows(
-        &config.agents.footer,
-        rows.iter().map(|row| row.footer.as_slice()),
-        snapshot
-            .workspaces
-            .iter()
-            .map(|workspace| workspace.tokens.as_slice()),
-    );
+    let footer = if config.agents.footer_in_bottom_bar() {
+        Vec::new()
+    } else {
+        footer_from_rows(snapshot, config, &rows)
+    };
     let pinned = rows.iter().take_while(|row| row.pinned).count();
     let pinned_height = rows[..pinned]
         .iter()
@@ -125,6 +122,80 @@ pub(super) fn render_agent_panel(
             render_agent_row(buffer, rect, row, config);
         },
     );
+}
+
+fn footer_from_rows(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    rows: &[AgentRow],
+) -> Vec<Vec<crate::ui::ResolvedToken>> {
+    crate::ui::sidebar_agent_footer_rows(
+        &config.agents.footer,
+        rows.iter().map(|row| row.footer.as_slice()),
+        snapshot
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.tokens.as_slice()),
+    )
+}
+
+/// The footer for the bottom band, picked the way the Agent panel picks it.
+pub(super) fn bar_footer_rows(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+) -> Vec<Vec<crate::ui::ResolvedToken>> {
+    footer_from_rows(snapshot, config, &agent_rows(snapshot, config, None))
+}
+
+/// Draw the footer rows side by side on one line: `row │ row`, cut on the right.
+pub(super) fn render_footer_bar(
+    buffer: &mut Buffer,
+    area: Rect,
+    footer: &[Vec<crate::ui::ResolvedToken>],
+    config: &ClientShellConfig,
+    hits: &mut ShellHitMap,
+) {
+    if area.is_empty() {
+        return;
+    }
+    let palette = &config.palette;
+    let base = Style::default().fg(palette.overlay0);
+    buffer.set_style(area, Style::default().bg(palette.panel_bg));
+    let width = area.width.saturating_sub(1) as usize;
+    let mut spans = vec![ratatui::text::Span::raw(" ")];
+    // Plugin spacer rows (only blanks or U+2800) would leave an empty gap.
+    let visible = footer.iter().filter(|row| {
+        !row.iter().all(|token| {
+            matches!(
+                &token.kind,
+                crate::ui::ResolvedTokenKind::Custom(text)
+                    if text.chars().all(|c| c.is_whitespace() || c == '\u{2800}')
+            )
+        })
+    });
+    for (index, tokens) in visible.enumerate() {
+        if index > 0 {
+            spans.push(ratatui::text::Span::styled(
+                " │ ",
+                Style::default().fg(palette.overlay0),
+            ));
+        }
+        spans.extend(crate::ui::resolved_token_spans(
+            tokens,
+            ("", base),
+            base,
+            base,
+            base,
+            base,
+            palette,
+            width,
+            crate::ui::TokenJoin::Space,
+        ));
+    }
+    Paragraph::new(Line::from(spans)).render(area, buffer);
+    if config.mouse_capture && config.agents.footer_click_action().is_some() {
+        hits.agent_footer = area;
+    }
 }
 
 fn render_pinned_agents(

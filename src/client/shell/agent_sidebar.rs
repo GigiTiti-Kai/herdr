@@ -30,7 +30,8 @@ pub(super) struct AgentRow {
 }
 
 pub(super) struct AgentRepo {
-    key: String,
+    /// `None` for a pane outside any repository.
+    key: Option<String>,
     name: String,
     /// The space title already names this repository.
     is_space_label: bool,
@@ -65,21 +66,22 @@ pub(super) fn mixed_repo_spaces(snapshot: &ClientShellSnapshot) -> HashSet<&str>
 
 /// In a space whose agents span several repositories, name the repository
 /// above each run of cards that leaves the one before it. The space title
-/// stands for the repository it is named after. Each row comes with a scope
+/// stands for the repository it is named after; cards outside any repository
+/// form their own run under `+ no repo`. Each row comes with a scope
 /// that keeps equal space ids of different machines apart.
 pub(super) fn insert_repo_headings<'a, S: PartialEq>(
     rows: impl IntoIterator<Item = (S, &'a mut AgentRow)>,
 ) {
-    let mut previous: Option<(S, String, String)> = None;
+    let mut previous: Option<(S, String, Option<String>)> = None;
     for (scope, row) in rows {
+        // A card of another space or machine, even one with no heading of its
+        // own, ends the run: the next card is drawn under it.
+        if previous.as_ref().is_some_and(|(space_scope, space, _)| {
+            *space_scope != scope || *space != row.workspace_id
+        }) {
+            previous = None;
+        }
         let Some(repo) = row.repo.as_ref() else {
-            // A card outside any repository leaves its own space's run open,
-            // so the next card still gets a heading when its repository changed.
-            if previous.as_ref().is_some_and(|(space_scope, space, _)| {
-                *space_scope != scope || *space != row.workspace_id
-            }) {
-                previous = None;
-            }
             continue;
         };
         let same_repo = previous
@@ -87,6 +89,8 @@ pub(super) fn insert_repo_headings<'a, S: PartialEq>(
             .filter(|(space_scope, space, _)| *space_scope == scope && *space == row.workspace_id)
             .map(|(_, _, key)| *key == repo.key);
         let key = repo.key.clone();
+        // A card with no lines draws only its state icon, which a heading would
+        // replace; it still ends the run so the next card is headed again.
         if !same_repo.unwrap_or(repo.is_space_label) && !row.rows.is_empty() {
             let heading = vec![crate::ui::ResolvedToken {
                 kind: crate::ui::ResolvedTokenKind::Workspace(format!("+ {}", repo.name)),
@@ -663,24 +667,27 @@ pub(super) fn agent_row(
         .iter()
         .cloned()
         .collect::<HashMap<_, _>>();
-    let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
-    let repo = pane
-        .and_then(|pane| pane.git_context.as_ref())
-        .filter(|_| mixed_repo_spaces.contains(workspace.workspace_id.as_str()))
-        .map(|git| AgentRepo {
-            key: git.repo_key.clone(),
-            name: git.repo.clone(),
-            is_space_label: git.repo == workspace.label,
-        });
-    // The repository heading names the repo, so the card's rows drop the
-    // server's `$repo` copy of it. The footer keeps it.
-    let row_tokens = repo
-        .as_ref()
-        .filter(|repo| tokens.get("repo") == Some(&repo.name))
-        .map(|_| {
-            let mut tokens = tokens.clone();
-            tokens.remove("repo");
-            tokens
+    let mut tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
+    let repo = mixed_repo_spaces
+        .contains(workspace.workspace_id.as_str())
+        .then(|| match pane.and_then(|pane| pane.git_context.as_ref()) {
+            Some(git) => AgentRepo {
+                key: Some(git.repo_key.clone()),
+                name: git.repo.clone(),
+                // The title must name the repo (the server drops `$repo` by the
+                // same name test) and, when the space knows its repository, be
+                // that one, so a same-named clone elsewhere gets its own heading.
+                is_space_label: git.repo == workspace.label
+                    && workspace
+                        .worktree
+                        .as_ref()
+                        .is_none_or(|space| space.key == git.repo_key),
+            },
+            None => AgentRepo {
+                key: None,
+                name: "no repo".into(),
+                is_space_label: false,
+            },
         });
     let state_text = labels
         .get(status_text(agent.agent_status))
@@ -690,7 +697,9 @@ pub(super) fn agent_row(
         .agent
         .as_deref()
         .and_then(crate::detect::parse_agent_label);
-    let context = crate::ui::AgentTokenContext {
+    // Holds no borrow of `tokens`, so the map can change between the footer and the rows.
+    let no_tokens = HashMap::new();
+    let base = crate::ui::AgentTokenContext {
         machine,
         workspace: &workspace.label,
         tab: tab_label,
@@ -702,14 +711,28 @@ pub(super) fn agent_row(
         terminal_title: agent.terminal_title.as_deref(),
         terminal_title_stripped: agent.terminal_title_stripped.as_deref(),
         canonical_agent,
-        tokens: &tokens,
+        tokens: &no_tokens,
     };
-    let footer =
-        crate::ui::sidebar_agent_footer_candidates(&config.agents.footer, &context, state_text);
+    let footer = crate::ui::sidebar_agent_footer_candidates(
+        &config.agents.footer,
+        &crate::ui::AgentTokenContext {
+            tokens: &tokens,
+            ..base
+        },
+        state_text,
+    );
     let folded = workspace_folded(config, folds, &workspace.workspace_id, &workspace.label);
+    // The repository heading names the repo, so the card's rows drop the
+    // server's `$repo` copy of it. The footer above keeps it.
+    if repo
+        .as_ref()
+        .is_some_and(|repo| tokens.get("repo") == Some(&repo.name))
+    {
+        tokens.remove("repo");
+    }
     let context = crate::ui::AgentTokenContext {
-        tokens: row_tokens.as_ref().unwrap_or(&tokens),
-        ..context
+        tokens: &tokens,
+        ..base
     };
     let crate::ui::AgentRows { rows, toggle_row } =
         crate::ui::sidebar_agent_rows_folded(&config.agents, context, state_text, folded);
@@ -1189,7 +1212,7 @@ fold_toggle_token = "$group"
         agent_rows(snapshot, config, None, folds)
             .iter()
             .flat_map(|row| {
-                let rect = Rect::new(0, 0, 47, row.rows.len() as u16);
+                let rect = Rect::new(0, 0, 47, row.rows.len().max(1) as u16);
                 let mut buffer = Buffer::empty(rect);
                 render_agent_row(&mut buffer, rect, row, config);
                 (0..rect.height)
@@ -1242,7 +1265,7 @@ fold_toggle_token = "$group"
     }
 
     #[test]
-    fn mixed_space_heads_each_run_once_and_skips_panes_outside_a_repository() {
+    fn mixed_space_heads_each_run_once_and_puts_panes_outside_a_repository_under_no_repo() {
         let headings = |repos: &[Option<&str>]| {
             let (snapshot, config) = repo_space(repos);
             panel_lines(&snapshot, &config, None)
@@ -1256,12 +1279,122 @@ fold_toggle_token = "$group"
         );
         assert_eq!(
             headings(&[Some("prompts-box"), None, Some(SCHEDULER)]),
-            [format!(" + {SCHEDULER}")]
+            [" + no repo".to_string(), format!(" + {SCHEDULER}")]
         );
-        // The card outside any repository does not hide the change behind it.
+        // The repository after the cards outside any repository is named again.
         assert_eq!(
-            headings(&[Some(SCHEDULER), None, Some("prompts-box")]),
-            [format!(" + {SCHEDULER}"), " + prompts-box".to_string()]
+            headings(&[
+                Some(SCHEDULER),
+                None,
+                None,
+                Some(SCHEDULER),
+                Some("prompts-box")
+            ]),
+            [
+                format!(" + {SCHEDULER}"),
+                " + no repo".to_string(),
+                format!(" + {SCHEDULER}"),
+                " + prompts-box".to_string()
+            ]
+        );
+        // Panes outside any repository alone do not make a space mixed.
+        assert!(headings(&[Some(SCHEDULER), None, Some(SCHEDULER)]).is_empty());
+    }
+
+    #[test]
+    fn mixed_space_card_with_no_lines_keeps_its_state_icon_and_ends_the_run() {
+        let (snapshot, mut config) =
+            repo_space(&[Some(SCHEDULER), Some("prompts-box"), Some(SCHEDULER)]);
+        // The title-repository card resolves no `$repo` or `$worktree`, so it has no lines.
+        config.agents = toml::from_str(r#"rows = [["$repo", "$worktree"]]"#).unwrap();
+        let rows = agent_rows(&snapshot, &config, None, None);
+        assert!(rows[1].rows.is_empty());
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.repo_heading_row.is_some())
+                .collect::<Vec<_>>(),
+            [true, false, true]
+        );
+        let lines = panel_lines(&snapshot, &config, None);
+        assert_eq!(lines.len(), 5, "{lines:?}");
+        assert_ne!(lines[2].trim(), "", "{lines:?}");
+    }
+
+    #[test]
+    fn mixed_space_run_ends_at_a_card_of_another_space() {
+        let (mut snapshot, config) = repo_space(&[
+            Some(SCHEDULER),
+            Some(SCHEDULER),
+            Some(SCHEDULER),
+            Some("prompts-box"),
+        ]);
+        let mut other = snapshot.workspaces[0].clone();
+        other.workspace_id = "ws_2".into();
+        other.label = "other".into();
+        snapshot.workspaces.push(other);
+        snapshot.agents[1].workspace_id = "ws_2".into();
+        snapshot
+            .panes
+            .iter_mut()
+            .find(|pane| pane.pane_id == "pane_2")
+            .unwrap()
+            .workspace_id = "ws_2".into();
+        let rows = agent_rows(&snapshot, &config, None, None);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.workspace_id.as_str(), row.repo_heading_row.is_some()))
+                .collect::<Vec<_>>(),
+            [
+                ("ws_1", true),
+                ("ws_2", false),
+                ("ws_1", true),
+                ("ws_1", true)
+            ]
+        );
+    }
+
+    #[test]
+    fn mixed_space_matches_its_own_repository_by_identity_not_by_name() {
+        let (mut snapshot, config) = repo_space(&[Some("prompts-box"), Some(SCHEDULER)]);
+        snapshot.workspaces[0].worktree = Some(crate::protocol::ClientShellWorktree {
+            key: "/prompts-box/.git".into(),
+            label: "prompts-box".into(),
+            is_linked_worktree: false,
+        });
+        let headings = |snapshot: &ClientShellSnapshot| {
+            panel_lines(snapshot, &config, None)
+                .into_iter()
+                .filter(|line| line.starts_with(" + "))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(headings(&snapshot), [format!(" + {SCHEDULER}")]);
+        // Another clone with the same name is a different repository.
+        let pane = snapshot
+            .panes
+            .iter_mut()
+            .find(|pane| pane.pane_id == "pane_1")
+            .unwrap();
+        pane.git_context.as_mut().unwrap().repo_key = "/elsewhere/prompts-box/.git".into();
+        assert_eq!(
+            headings(&snapshot),
+            [" + prompts-box".to_string(), format!(" + {SCHEDULER}")]
+        );
+        // A title that does not name the repository never stands for it,
+        // whatever repository the space belongs to.
+        snapshot.workspaces[0].label = "work".into();
+        snapshot.workspaces[0].custom_label = true;
+        snapshot
+            .panes
+            .iter_mut()
+            .find(|pane| pane.pane_id == "pane_1")
+            .unwrap()
+            .git_context
+            .as_mut()
+            .unwrap()
+            .repo_key = "/prompts-box/.git".into();
+        assert_eq!(
+            headings(&snapshot),
+            [" + prompts-box".to_string(), format!(" + {SCHEDULER}")]
         );
     }
 

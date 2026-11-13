@@ -65,6 +65,7 @@ impl ResolvedToken {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct AgentTokenContext<'a> {
     pub(crate) machine: Option<&'a str>,
     pub(crate) workspace: &'a str,

@@ -129,6 +129,45 @@ Before committing, propose the commit message and get alignment.
 
 After Can confirms the change is integrated, update the shared checkout, remove the task worktree, and delete the task branch locally and remotely.
 
+## Fork Check Workflow
+
+This section is fork-only. It applies to work on the `GigiTiti-Kai/herdr` fork
+described in `fork/README.md`, where changes land through pull requests into
+`dev`. For that work it replaces the "Run `just check` before committing" rule
+under Testing. Upstream maintainer work keeps the Testing rules.
+
+- Full checks (`just ci`, clippy, the whole test suite) run in the pull
+  request's CI. `.github/workflows/ci.yml` runs `just lint` and `just ci-tests`
+  on Linux, `just ci` on macOS and `just check` on Windows, and
+  `distribution.yml` runs the docs contract tests when docs change. The work
+  board already waits for these checks with `merge.checks: github` (its
+  default) and sends failures back. Do not add another wait.
+- Locally, run only the tests the change reaches, for example
+  `just test-one <filter>`, `cargo nextest run --locked -E '<filterset>'`,
+  `python3 -m unittest scripts.<test_module>` and `cargo fmt --check`. A
+  documentation-only change needs no local test run.
+- Run at most one heavy job at a time across the whole machine, in any repo or
+  worktree. Every Rust build, `cargo` test or clippy run, `just` recipe that
+  builds, and benchmark counts. Never build in two worktrees at once.
+- The pre-commit hook runs `just lint`, a full clippy build, so every commit is
+  a heavy job too: commit when no other build is running. Do not skip the hooks
+  to save the build.
+- Use the shared heavy-job lock (`heavy-run -- <command>`) once it can run
+  `cargo` and `just` from the calling worktree. It takes the machine-wide lock
+  and caps the job's memory. If it cannot start the job, stop and report
+  instead of running the job without the lock. Until the lock can be used,
+  check that no other build is running (`pgrep -a 'cargo|rustc'`) before
+  starting one. A job stopped by a memory cap or by earlyoom is not a test
+  failure: report it and do not retry it unchanged.
+- Keep local full validation until the pull request's CI has really run and
+  passed. Run the full check locally (`just ci`, one at a time) and say so when
+  the work lands without a pull request into `dev` (`ci.yml` does not run on
+  pushes to `dev`, so `fork/sync.sh` merges get no CI), when the task sets
+  `merge.checks` to `none`, or when the pull request's head commit gets no
+  checks, a skipped or cancelled required job, or an infrastructure failure.
+  A test failure in CI is fixed like any failed check. A fork whose Actions are
+  throttled shows zero checks and a yellow banner on its Actions page.
+
 ## Testing
 
 Use `just` recipes by default instead of invoking cargo or scripts directly.

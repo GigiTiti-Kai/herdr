@@ -227,21 +227,14 @@ pub(super) fn render_agent_panel(
         return;
     }
 
-    let rows = agent_rows(snapshot, config, None, folds.for_endpoint(endpoint_id));
+    let mut rows = agent_rows(snapshot, config, None, folds.for_endpoint(endpoint_id));
     let footer = if config.agents.footer_in_bottom_bar() {
         Vec::new()
     } else {
         footer_from_rows(snapshot, config, &rows)
     };
-    let pinned = rows.iter().take_while(|row| row.pinned).count();
-    let pinned_height = rows[..pinned]
-        .iter()
-        .map(|row| row.rows.len().max(1))
-        .sum::<usize>()
-        + pinned.saturating_sub(1) * usize::from(config.agents.row_gap);
-    let fits = pinned_height + 1 + usize::from(MIN_AGENT_LIST_ROWS)
-        <= usize::from(area.height.saturating_sub(AGENT_LIST_TOP));
-    let (fixed, listed) = rows.split_at(if fits { pinned } else { 0 });
+    let (fixed_count, pinned_height) = split_pinned_agents(&mut rows, config, area.height);
+    let (fixed, listed) = rows.split_at(fixed_count);
     let mut list_area = area;
     if !fixed.is_empty() {
         render_pinned_agents(buffer, area, fixed, config, endpoint_id, hits);
@@ -271,6 +264,37 @@ pub(super) fn render_agent_panel(
             render_agent_row(buffer, rect, row, config);
         },
     );
+}
+
+/// How many leading pinned cards get their own block above the list, and that
+/// block's height. When they do not fit they are drawn inside the list, so
+/// their repository headings are redone as one run with the cards below.
+fn split_pinned_agents(
+    rows: &mut [AgentRow],
+    config: &ClientShellConfig,
+    height: u16,
+) -> (usize, usize) {
+    let pinned = rows.iter().take_while(|row| row.pinned).count();
+    // A pinned card's own heading does not depend on the split: pinned cards lead the list.
+    let pinned_height = rows[..pinned]
+        .iter()
+        .map(|row| row.rows.len().max(1))
+        .sum::<usize>()
+        + pinned.saturating_sub(1) * usize::from(config.agents.row_gap);
+    let fits = pinned_height + 1 + usize::from(MIN_AGENT_LIST_ROWS)
+        <= usize::from(height.saturating_sub(AGENT_LIST_TOP));
+    if fits {
+        return (pinned, pinned_height);
+    }
+    if pinned > 0 {
+        for row in rows.iter_mut() {
+            if let Some(at) = row.repo_heading_row.take() {
+                row.rows.remove(at);
+            }
+        }
+        insert_repo_headings(rows.iter_mut().map(|row| ((), row)));
+    }
+    (0, pinned_height)
 }
 
 fn footer_from_rows(
@@ -1258,6 +1282,35 @@ fold_toggle_token = "$group"
                 format!(" + {SCHEDULER}"),
                 " + prompts-box".to_string()
             ]
+        );
+    }
+
+    #[test]
+    fn mixed_space_run_continues_into_the_list_when_pinned_cards_do_not_fit() {
+        let (mut snapshot, mut config) = repo_space(&[Some(SCHEDULER), Some("prompts-box")]);
+        snapshot.agents[0].name = Some("pin".into());
+        config.agents.pinned = vec!["pin".into()];
+        let headings = |rows: &[AgentRow]| {
+            rows.iter()
+                .map(|row| row.repo_heading_row.is_some())
+                .collect::<Vec<_>>()
+        };
+
+        let mut rows = agent_rows(&snapshot, &config, None, None);
+        assert_eq!(split_pinned_agents(&mut rows, &config, 60).0, 1);
+        assert_eq!(headings(&rows), [true, false]);
+
+        let mut rows = agent_rows(&snapshot, &config, None, None);
+        assert_eq!(split_pinned_agents(&mut rows, &config, 6).0, 0);
+        assert_eq!(headings(&rows), [true, true]);
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row.rows.iter().flatten().any(|token| matches!(
+                    &token.kind,
+                    crate::ui::ResolvedTokenKind::Workspace(text) if text.starts_with("+ ")
+                )))
+                .count(),
+            2
         );
     }
 

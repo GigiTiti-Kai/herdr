@@ -74,8 +74,14 @@ pub(super) fn insert_repo_headings<'a, S: PartialEq>(
 ) {
     let mut previous: Option<(S, String, Option<String>)> = None;
     for (scope, row) in rows {
-        // A card with no lines is not drawn, so it neither shows nor breaks a run.
-        let Some(repo) = row.repo.as_ref().filter(|_| !row.rows.is_empty()) else {
+        // A card of another space or machine, even one with no heading of its
+        // own, ends the run: the next card is drawn under it.
+        if previous.as_ref().is_some_and(|(space_scope, space, _)| {
+            *space_scope != scope || *space != row.workspace_id
+        }) {
+            previous = None;
+        }
+        let Some(repo) = row.repo.as_ref() else {
             continue;
         };
         let same_repo = previous
@@ -83,7 +89,9 @@ pub(super) fn insert_repo_headings<'a, S: PartialEq>(
             .filter(|(space_scope, space, _)| *space_scope == scope && *space == row.workspace_id)
             .map(|(_, _, key)| *key == repo.key);
         let key = repo.key.clone();
-        if !same_repo.unwrap_or(repo.is_space_label) {
+        // A card with no lines draws only its state icon, which a heading would
+        // replace; it still ends the run so the next card is headed again.
+        if !same_repo.unwrap_or(repo.is_space_label) && !row.rows.is_empty() {
             let heading = vec![crate::ui::ResolvedToken {
                 kind: crate::ui::ResolvedTokenKind::Workspace(format!("+ {}", repo.name)),
                 style: Default::default(),
@@ -666,12 +674,14 @@ pub(super) fn agent_row(
             Some(git) => AgentRepo {
                 key: Some(git.repo_key.clone()),
                 name: git.repo.clone(),
-                // Match by identity when the space knows its repository, so a
-                // same-named clone elsewhere still gets its own heading.
-                is_space_label: workspace.worktree.as_ref().map_or_else(
-                    || git.repo == workspace.label,
-                    |space| space.key == git.repo_key,
-                ),
+                // The title must name the repo (the server drops `$repo` by the
+                // same name test) and, when the space knows its repository, be
+                // that one, so a same-named clone elsewhere gets its own heading.
+                is_space_label: git.repo == workspace.label
+                    && workspace
+                        .worktree
+                        .as_ref()
+                        .is_none_or(|space| space.key == git.repo_key),
             },
             None => AgentRepo {
                 key: None,
@@ -1202,7 +1212,7 @@ fold_toggle_token = "$group"
         agent_rows(snapshot, config, None, folds)
             .iter()
             .flat_map(|row| {
-                let rect = Rect::new(0, 0, 47, row.rows.len() as u16);
+                let rect = Rect::new(0, 0, 47, row.rows.len().max(1) as u16);
                 let mut buffer = Buffer::empty(rect);
                 render_agent_row(&mut buffer, rect, row, config);
                 (0..rect.height)
@@ -1292,7 +1302,7 @@ fold_toggle_token = "$group"
     }
 
     #[test]
-    fn mixed_space_card_with_no_lines_neither_shows_nor_breaks_a_run() {
+    fn mixed_space_card_with_no_lines_keeps_its_state_icon_and_ends_the_run() {
         let (snapshot, mut config) =
             repo_space(&[Some(SCHEDULER), Some("prompts-box"), Some(SCHEDULER)]);
         // The title-repository card resolves no `$repo` or `$worktree`, so it has no lines.
@@ -1303,7 +1313,43 @@ fold_toggle_token = "$group"
             rows.iter()
                 .map(|row| row.repo_heading_row.is_some())
                 .collect::<Vec<_>>(),
-            [true, false, false]
+            [true, false, true]
+        );
+        let lines = panel_lines(&snapshot, &config, None);
+        assert_eq!(lines.len(), 5, "{lines:?}");
+        assert_ne!(lines[2].trim(), "", "{lines:?}");
+    }
+
+    #[test]
+    fn mixed_space_run_ends_at_a_card_of_another_space() {
+        let (mut snapshot, config) = repo_space(&[
+            Some(SCHEDULER),
+            Some(SCHEDULER),
+            Some(SCHEDULER),
+            Some("prompts-box"),
+        ]);
+        let mut other = snapshot.workspaces[0].clone();
+        other.workspace_id = "ws_2".into();
+        other.label = "other".into();
+        snapshot.workspaces.push(other);
+        snapshot.agents[1].workspace_id = "ws_2".into();
+        snapshot
+            .panes
+            .iter_mut()
+            .find(|pane| pane.pane_id == "pane_2")
+            .unwrap()
+            .workspace_id = "ws_2".into();
+        let rows = agent_rows(&snapshot, &config, None, None);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.workspace_id.as_str(), row.repo_heading_row.is_some()))
+                .collect::<Vec<_>>(),
+            [
+                ("ws_1", true),
+                ("ws_2", false),
+                ("ws_1", true),
+                ("ws_1", true)
+            ]
         );
     }
 
@@ -1329,6 +1375,23 @@ fold_toggle_token = "$group"
             .find(|pane| pane.pane_id == "pane_1")
             .unwrap();
         pane.git_context.as_mut().unwrap().repo_key = "/elsewhere/prompts-box/.git".into();
+        assert_eq!(
+            headings(&snapshot),
+            [" + prompts-box".to_string(), format!(" + {SCHEDULER}")]
+        );
+        // A title that does not name the repository never stands for it,
+        // whatever repository the space belongs to.
+        snapshot.workspaces[0].label = "work".into();
+        snapshot.workspaces[0].custom_label = true;
+        snapshot
+            .panes
+            .iter_mut()
+            .find(|pane| pane.pane_id == "pane_1")
+            .unwrap()
+            .git_context
+            .as_mut()
+            .unwrap()
+            .repo_key = "/prompts-box/.git".into();
         assert_eq!(
             headings(&snapshot),
             [" + prompts-box".to_string(), format!(" + {SCHEDULER}")]

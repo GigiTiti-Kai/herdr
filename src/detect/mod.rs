@@ -460,21 +460,57 @@ fn hermes_installer_agent_name(argv: &[String]) -> Option<String> {
         return None;
     }
 
-    // Recognize the captured installer bootstrap, not arbitrary Python source.
-    // Both root literals must agree; reject escapes or quotes rather than parse Python.
-    let rest = code.strip_prefix(HERMES_INSTALLER_PREFIX)?;
-    let (root, rest) = rest.split_once("')\n")?;
-    if root.is_empty() || root.contains(['\'', '\\', '\n', '\r']) {
-        return None;
+    // Recognize a captured installer bootstrap, not arbitrary Python source.
+    if hermes_installer_v1_matches(code) || hermes_installer_v2_matches(code) {
+        return Some(agent_label(Agent::Hermes).to_string());
     }
-    let rest = rest
-        .strip_prefix(HERMES_INSTALLER_MIDDLE)?
-        .strip_prefix(root)?;
-    (rest == HERMES_INSTALLER_SUFFIX).then(|| agent_label(Agent::Hermes).to_string())
+    None
+}
+
+fn hermes_installer_v1_matches(code: &str) -> bool {
+    // Both root literals must agree; reject escapes or quotes rather than parse Python.
+    let Some(rest) = code.strip_prefix(HERMES_INSTALLER_PREFIX) else {
+        return false;
+    };
+    let Some((root, rest)) = rest.split_once("')\n") else {
+        return false;
+    };
+    if root.is_empty() || root.contains(['\'', '\\', '\n', '\r']) {
+        return false;
+    }
+    let Some(rest) = rest
+        .strip_prefix(HERMES_INSTALLER_MIDDLE)
+        .and_then(|rest| rest.strip_prefix(root))
+    else {
+        return false;
+    };
+    rest == HERMES_INSTALLER_SUFFIX
+}
+
+fn hermes_installer_v2_matches(code: &str) -> bool {
+    // Later installer revision (Hermes 0.23.1+ dev builds): the import block
+    // grows and a closure-repair helper makes the body far larger, so a
+    // full-text template no longer works. Match this revision's invariants
+    // instead: one root literal feeds both sys.path and the repair helper,
+    // and the script still ends by entering hermes_cli.main.
+    let Some(rest) = code.strip_prefix(HERMES_INSTALLER_V2_PREFIX) else {
+        return false;
+    };
+    let Some((root, rest)) = rest.split_once("')\n") else {
+        return false;
+    };
+    if root.is_empty() || root.contains(['\'', '\\', '\n', '\r']) {
+        return false;
+    }
+    rest.contains("def _hermes_closure_repair():")
+        && rest.contains(root)
+        && rest.contains("import hermes_bootstrap")
+        && rest.trim_end().ends_with("sys.exit(main())")
 }
 
 // Installer source captured in #4910. Only the installation root varies. Unknown
 // bootstrap revisions deliberately fall back to ordinary process identification.
+const HERMES_INSTALLER_V2_PREFIX: &str = "import os, re, sys\nimport contextlib, hashlib, io, pathlib, shutil, subprocess\nos.environ.pop('PYTHONHOME', None)\nos.environ.pop('PYTHONPATH', None)\nsys.path.insert(0, '";
 const HERMES_INSTALLER_PREFIX: &str = "import os, re, sys
 os.environ.pop('PYTHONHOME', None)
 os.environ.pop('PYTHONPATH', None)
@@ -1490,6 +1526,65 @@ mod tests {
             "/opt/another install/hermes-agent",
         );
         assert_eq!(hermes_installer_agent_name(&argv), Some("hermes".into()));
+    }
+
+    fn hermes_installer_v2_capture() -> crate::platform::ForegroundJob {
+        // Capture from a macOS pane running the later installer revision;
+        // private path components were redacted.
+        let capture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/hermes-installer-process-info-macos-2026.json"
+        ))
+        .unwrap();
+        let info = &capture["result"]["process_info"];
+        crate::platform::ForegroundJob {
+            process_group_id: info["foreground_process_group_id"].as_u64().unwrap() as u32,
+            processes: info["foreground_processes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|process| crate::platform::ForegroundProcess {
+                    pid: process["pid"].as_u64().unwrap() as u32,
+                    name: process["name"].as_str().unwrap().to_string(),
+                    argv0: Some(process["argv0"].as_str().unwrap().to_string()),
+                    argv: Some(serde_json::from_value(process["argv"].clone()).unwrap()),
+                    cmdline: Some(process["cmdline"].as_str().unwrap().to_string()),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_hermes_installer_v2_capture() {
+        let mut job = hermes_installer_v2_capture();
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Hermes, "hermes".to_string()))
+        );
+        job.processes
+            .retain(|process| process.pid == job.process_group_id);
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Hermes, "hermes".to_string()))
+        );
+    }
+
+    #[test]
+    fn hermes_installer_v2_signature_allows_another_install_root() {
+        let job = hermes_installer_v2_capture();
+        let mut argv = job.processes.last().unwrap().argv.clone().unwrap();
+        argv[3] = argv[3].replace(
+            "/Users/REDACTED/.hermes/hermes-agent",
+            "/opt/another install/hermes-agent",
+        );
+        assert_eq!(hermes_installer_agent_name(&argv), Some("hermes".into()));
+    }
+
+    #[test]
+    fn hermes_installer_v2_rejects_missing_repair_helper() {
+        let job = hermes_installer_v2_capture();
+        let mut argv = job.processes.last().unwrap().argv.clone().unwrap();
+        argv[3] = argv[3].replace("def _hermes_closure_repair():", "def _other():");
+        assert_eq!(hermes_installer_agent_name(&argv), None);
     }
 
     #[test]

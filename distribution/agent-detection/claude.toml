@@ -1,7 +1,7 @@
 id = "claude"
-version = "2026.11.02.1"
+version = "2026.11.14.1"
 min_engine_version = 2
-updated_at = "2026-11-02T00:00:00Z"
+updated_at = "2026-11-14T00:00:00Z"
 aliases = ["claude-code"]
 
 [[rules]]
@@ -63,7 +63,7 @@ priority = 200
 region = "after_last_horizontal_rule"
 # This live counter is independent of foreground work and permission prompts.
 # Its idle fallback stays below every real foreground/blocker/idle signal.
-line_regex = ['^\s*[⏵⏸].*·\s+(?P<background_shells>[1-9]\d*)\s+shells?(?:\s|·|$)']
+line_regex = ['^\s*[⏵⏸].*·\s+(?P<background_shells>[1-9]\d*)\s+shells?(?:\s|·|,|$)']
 
 [[rules]]
 id = "btw_overlay_working"

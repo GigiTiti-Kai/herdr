@@ -1071,6 +1071,22 @@ fn claude_background_shell_counter_ignores_zero_history_and_prompt_text() {
 }
 
 #[test]
+fn claude_background_shell_counter_reads_comma_separated_footer() {
+    for (footer, expected) in [
+        (
+            "  ⏵⏵ bypass permissions on · 2 shells, 1 monitor · ← 1 agent\n",
+            2,
+        ),
+        ("  ⏵⏵ auto mode on · 1 shell · ← for agents\n", 1),
+        ("  ⏵⏵ auto mode on · 3 shells\n", 3),
+    ] {
+        let screen = format!("─────────────────────────\n❯\n─────────────────────────\n{footer}");
+        let result = osc_explain(Agent::Claude, &screen, "", "");
+        assert_eq!(result.background_shells, Some(expected), "{footer}");
+    }
+}
+
+#[test]
 fn claude_live_turn_with_background_shell_remains_working() {
     let screen = concat!(
         "────────────────────────────────────────────────────────────────\n",

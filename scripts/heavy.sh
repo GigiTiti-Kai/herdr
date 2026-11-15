@@ -17,6 +17,8 @@ if [ -n "${HEAVY_RUN_ACTIVE:-}" ] || [ -z "$hr" ]; then exec "$@"; fi
 # shellcheck disable=SC2016 # the last line's $(cat) is expanded by the bash inside the unit
 {
   export -p
+  # A caller's empty HEAVY_RUN_ACTIVE would hide the unit's own: a nested job would then wait for this job's lock.
+  echo 'export HEAVY_RUN_ACTIVE=1'
   printf 'cd -- %q || exit 2\n' "$PWD"
   printf 'caller=%q\n' "$$"
   printf 'set --'; printf ' %q' "$@"; printf '\n'

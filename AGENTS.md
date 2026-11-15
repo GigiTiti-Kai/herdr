@@ -143,22 +143,31 @@ under Testing. Upstream maintainer work keeps the Testing rules.
   board already waits for these checks with `merge.checks: github` (its
   default) and sends failures back. Do not add another wait.
 - Locally, run only the tests the change reaches, for example
-  `just test-one <filter>`, `cargo nextest run --locked -E '<filterset>'`,
+  `just test-one <filter>`,
+  `scripts/heavy.sh cargo nextest run --locked -E '<filterset>'`,
   `python3 -m unittest scripts.<test_module>` and `cargo fmt --check`. A
   documentation-only change needs no local test run.
 - Run at most one heavy job at a time across the whole machine, in any repo or
   worktree. Every Rust build, `cargo` test or clippy run, `just` recipe that
   builds, and benchmark counts. Never build in two worktrees at once.
+- The `just` recipes take the shared heavy-job lock themselves: their heavy
+  lines (cargo build, test, nextest and clippy, `windows-lint`, `bench-*`,
+  `build-libghostty-vt`) and `fork/build.sh` run through `scripts/heavy.sh`,
+  which waits for the machine-wide lock of `heavy-run` and caps the job's
+  memory (6G, swap 2G). Where heavy-run is not installed (CI, other machines)
+  or a job already runs under it, the line runs directly.
+- Run a heavy command outside these recipes as `scripts/heavy.sh <command>`,
+  for example `scripts/heavy.sh cargo nextest run --locked -E '<filterset>'`
+  or `scripts/heavy.sh cargo build --locked`. It runs the job from the
+  calling worktree with its environment, and prints
+  `heavy: rc=… memory.peak=…MiB swap.peak=…MiB` at the end.
 - The pre-commit hook runs `just lint`, a full clippy build, so every commit is
-  a heavy job too: commit when no other build is running. Do not skip the hooks
-  to save the build.
-- Use the shared heavy-job lock (`heavy-run -- <command>`) once it can run
-  `cargo` and `just` from the calling worktree. It takes the machine-wide lock
-  and caps the job's memory. If it cannot start the job, stop and report
-  instead of running the job without the lock. Until the lock can be used,
-  check that no other build is running (`pgrep -a 'cargo|rustc'`) before
-  starting one. A job stopped by a memory cap or by earlyoom is not a test
-  failure: report it and do not retry it unchanged.
+  a heavy job too and waits for the lock. Do not skip the hooks to save the
+  build.
+- If `scripts/heavy.sh` cannot start the job, stop and report instead of
+  running the job without the lock. A job stopped by the memory cap (it ends
+  with `Finished with result: oom-kill`) or by earlyoom is not a test failure:
+  report it and do not retry it unchanged.
 - Keep local full validation until the pull request's CI has really run and
   passed. Run the full check locally (`just ci`, one at a time) and say so when
   the work lands without a pull request into `dev` (`ci.yml` does not run on

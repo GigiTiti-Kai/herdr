@@ -12,7 +12,7 @@ export HERDR_BUILD_CHANNEL=fork
 HERDR_BUILD_ID="$(git rev-parse --short HEAD)"
 export HERDR_BUILD_ID
 
-cargo build --release --locked
+scripts/heavy.sh cargo build --release --locked
 # install(1) unlinks the destination first, so replacing a running binary is safe.
 install -m755 target/release/herdr "$HOME/.local/bin/herdr"
 "$HOME/.local/bin/herdr" --version

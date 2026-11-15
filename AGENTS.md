@@ -158,7 +158,7 @@ under Testing. Upstream maintainer work keeps the Testing rules.
   or a job already runs under it, the line runs directly.
 - Run a heavy command outside these recipes as `scripts/heavy.sh <command>`,
   for example `scripts/heavy.sh cargo nextest run --locked -E '<filterset>'`
-  or `scripts/heavy.sh git cherry-pick <commit>`. It runs the job from the
+  or `scripts/heavy.sh cargo build --locked`. It runs the job from the
   calling worktree with its environment, and prints
   `heavy: rc=… memory.peak=…MiB swap.peak=…MiB` at the end.
 - The pre-commit hook runs `just lint`, a full clippy build, so every commit is

@@ -33,4 +33,8 @@ mib() { awk '{ printf "%d", $1 / 1048576 }' "$1" 2>/dev/null; }
 echo "heavy: rc=$rc memory.peak=$(mib "$unit/memory.peak")MiB swap.peak=$(mib "$unit/memory.swap.peak")MiB" >&2
 exit "$rc"
 EOF
-} | "$hr" -- bash -c 'eval "$(cat)"' "$@" # the trailing arguments only name the job in heavy-run's jobs.log
+} | setsid -w "$hr" -- bash -c 'eval "$(cat)"' "$@" & # the trailing arguments only name the job in jobs.log
+# heavy-run holds the lock. In a session of its own, a stop of the caller's process group (the board's, or Ctrl-C)
+# does not reach it: it keeps the lock until the watcher has ended the unit. `wait` lets this script stop at once.
+trap 'exit 130' INT
+wait "$!"

@@ -336,8 +336,9 @@ pub(super) fn render_footer_bar(
         return;
     }
     let palette = &config.palette;
-    let base = Style::default().fg(palette.overlay0);
-    buffer.set_style(area, Style::default().bg(palette.panel_bg));
+    let base = Style::default().fg(palette.subtext0);
+    // No background: the band sits on the host terminal's own background.
+    buffer.set_style(area, Style::reset());
     let width = area.width.saturating_sub(1) as usize;
     let mut spans = vec![ratatui::text::Span::raw(" ")];
     // Plugin spacer rows (only blanks or U+2800) would leave an empty gap.
@@ -844,6 +845,36 @@ mod tests {
     use crate::protocol::{render_ansi::BlitEncoder, FrameData};
 
     const ICON: &str = "\u{e1a0}";
+
+    #[test]
+    fn footer_bar_leaves_background_unpainted() {
+        let config = ClientShellConfig::from_config(&crate::config::Config::default());
+        let area = Rect::new(0, 0, 30, 1);
+        let mut buffer = Buffer::empty(area);
+        buffer.set_style(area, Style::default().bg(ratatui::style::Color::Red));
+        let token = |text: &str| crate::ui::ResolvedToken {
+            kind: crate::ui::ResolvedTokenKind::Custom(text.into()),
+            style: Default::default(),
+        };
+        render_footer_bar(
+            &mut buffer,
+            area,
+            &[vec![token("5d6h")], vec![token("quota")]],
+            &config,
+            &mut ShellHitMap::default(),
+        );
+        for x in 0..area.width {
+            assert_eq!(
+                buffer[(x, 0)].bg,
+                ratatui::style::Color::Reset,
+                "column {x}"
+            );
+        }
+        let text: String = (0..area.width).map(|x| buffer[(x, 0)].symbol()).collect();
+        let at = |needle: &str| text.find(needle).expect(needle) as u16;
+        assert_eq!(buffer[(at("5d6h"), 0)].fg, config.palette.subtext0);
+        assert_eq!(buffer[(at("│"), 0)].fg, config.palette.overlay0);
+    }
 
     fn rendered(rows_toml: &str, width: u16) -> (Buffer, ClientShellConfig) {
         let tokens = HashMap::from([

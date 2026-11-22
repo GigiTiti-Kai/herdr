@@ -236,6 +236,11 @@ pub(super) enum ClientChromeDrag {
         last_sent_ratio: Option<f32>,
         last_sent_at: Option<std::time::Instant>,
     },
+    /// The dock's left separator; the width follows the pointer.
+    DockWidth {
+        last_sent_width: Option<u16>,
+        last_sent_at: Option<std::time::Instant>,
+    },
     PaneScrollbar {
         hit: PaneHit,
         grab_row_offset: u16,

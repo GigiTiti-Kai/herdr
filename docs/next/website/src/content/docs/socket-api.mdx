@@ -105,6 +105,7 @@ Raw socket method names use dot notation:
 | Tab | `tab.create`, `tab.list`, `tab.get`, `tab.focus`, `tab.rename`, `tab.move`, `tab.close` |
 | Pane | `pane.split`, `pane.swap`, `pane.move`, `pane.zoom`, `pane.layout`, `pane.process_info`, `pane.neighbor`, `pane.edges`, `pane.focus_direction`, `pane.resize`, `pane.list`, `pane.current`, `pane.get`, `pane.rename`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, `pane.release_agent`, `pane.close`, `pane.wait_for_output` |
 | Popup | `popup.close` |
+| Dock | `dock.set_width` |
 | Layout | `layout.export`, `layout.apply`, `layout.set_split_ratio` |
 | Agent | `agent.list`, `agent.get`, `agent.read`, `agent.explain`, `agent.send_keys`, `agent.prompt`, `agent.wait`, `agent.rename`, `agent.focus`, `agent.start`, `agent.view.set`, `agent.view.clear` |
 | Events | `events.subscribe`, `events.wait` |
@@ -613,6 +614,18 @@ pane ID `dock` in `pane.get`, `pane.focus`, `pane.focus_direction` (Right from a
 pane without a right neighbor enters it; Left leaves it), `pane.close`,
 `plugin.pane.focus`, and `plugin.pane.close`. `pane.get` reports empty `workspace_id` and `tab_id`;
 `pane.list` does not include it, and it emits no pane lifecycle events.
+
+`dock.set_width` sets the open dock's width in cells, its left separator
+included, and the client sends it while you drag that separator. The width is
+kept to at least 20 cells for the dock and 20 for the tabs to its left, and the
+response is `type: "dock_width_set"` with the applied `width`. Without an open
+dock it returns `dock_not_found`. The server remembers the last width while it
+runs, and `plugin.pane.open` uses it when the request has no `width`, before
+the manifest's width.
+
+```json
+{"id":"req_dock","method":"dock.set_width","params":{"width":70}}
+```
 
 ## Socket transport
 

@@ -147,6 +147,9 @@ pub enum ResponseResult {
     LayoutSplitRatioSet {
         layout: LayoutDescription,
     },
+    DockWidthSet {
+        width: u16,
+    },
     PaneNeighbor {
         neighbor: PaneNeighborResult,
     },

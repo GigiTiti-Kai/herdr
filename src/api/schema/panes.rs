@@ -168,6 +168,12 @@ pub struct LayoutSetSplitRatioParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct DockSetWidthParams {
+    /// Columns of the dock column, its left separator included.
+    pub width: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct LayoutDescription {
     pub workspace_id: String,
     pub tab_id: String,

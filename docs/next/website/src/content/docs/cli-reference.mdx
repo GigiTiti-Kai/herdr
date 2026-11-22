@@ -531,7 +531,8 @@ cells or percentages such as `80%`; omitted dimensions default to half the
 terminal size, and values smaller than the popup minimum are clamped. A popup
 is not a Herdr pane, does not export `HERDR_PANE_ID`, and does not participate
 in pane or agent APIs. `--placement dock` opens a full-height column at the right
-of every tab; it accepts only `--width` (default `30%`), takes focus only
+of every tab; it accepts only `--width` (default: the width you last dragged its
+left edge to while the server runs, then the manifest's, then `30%`), takes focus only
 without `--no-focus`, and is addressed as `dock`, so `herdr pane get dock` reports whether
 it is open and `herdr plugin pane close dock` closes it. Native non-terminal
 plugin panes are outside plugin v1.

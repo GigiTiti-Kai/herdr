@@ -887,6 +887,8 @@ pub struct AppState {
     pub(crate) popup_pane: Option<PopupPaneState>,
     /// Session-wide right column, addressed publicly as `dock`.
     pub(crate) dock_pane: Option<DockPaneState>,
+    /// Width of the last dock drag; reused when the dock reopens without `--width`. Memory only.
+    pub(crate) dock_last_width: Option<crate::popup_size::PopupSize>,
     /// Whether keyboard input targets the dock instead of the tiled focused pane.
     pub(crate) dock_focused: bool,
     /// Recent plugin action/event command executions.
@@ -1128,6 +1130,7 @@ impl AppState {
             plugin_panes: std::collections::HashMap::new(),
             popup_pane: None,
             dock_pane: None,
+            dock_last_width: None,
             dock_focused: false,
             plugin_command_logs: Vec::new(),
             next_plugin_command_log_id: 1,

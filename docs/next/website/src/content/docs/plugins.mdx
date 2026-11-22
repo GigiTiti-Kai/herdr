@@ -342,7 +342,9 @@ pane area. It spans the full height and stays visible on every tab and
 workspace; tab layouts, including split and zoomed tabs, use the area to its
 left. Only `width` is accepted (cells or a percentage such as `"30%"`, default
 `30%`); `height`, `workspace_id`, `target_pane_id`, and `direction` are rejected,
-and a second open returns `ui_busy`. With `focus: false` (`--no-focus`) the
+and a second open returns `ui_busy`. Drag the dock's left edge to resize it. The server
+remembers the last dragged width while it runs, and an open without `width`
+uses it before the manifest's `width`. With `focus: false` (`--no-focus`) the
 dock opens without moving focus. Click it, run `herdr plugin pane focus dock`,
 or move focus right from a pane with no right neighbor to type into it; move focus left, focus any tab, workspace, or pane, or
 close the dock to return to the tiled pane. The prefix key keeps working while

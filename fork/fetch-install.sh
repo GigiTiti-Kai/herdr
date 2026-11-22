@@ -14,6 +14,8 @@ workflow=build-artifacts-manual.yml
 name=herdr-linux-x86_64
 artifact="$name-ReleaseSafe-simd-false"
 dest="${HERDR_INSTALL_DEST:-$HOME/.local/bin/herdr}"
+# A bare name would make "$dest" --version run whatever PATH finds, and live-handoff needs a full path.
+[[ "$dest" == /* ]] || dest="$PWD/$dest"
 
 run="${1:-}"
 if [ -z "$run" ]; then

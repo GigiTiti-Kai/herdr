@@ -29,7 +29,10 @@ for these upgrades; keep the old mirror intact rather than forcing it forward.
 - `fork/build.sh` — build with `HERDR_BUILD_CHANNEL=fork`, install to `~/.local/bin/herdr`.
 - `fork/sync.sh [<ref>]` — fetch upstream, ff master to the newest `v*` tag (or `<ref>`),
   merge into dev, push dev, build. Resolve conflicts by hand if the merge stops.
-- After either, switch the running server to the new binary. Two ways:
+- `fork/fetch-install.sh [<run-id>]` — install the x86_64 build of a
+  `build-artifacts-manual.yml` run instead of building locally (default: the newest
+  run, only if it built dev's head); checks commit, sha256 and `-fork.<sha8>` version.
+- After any of these, switch the running server to the new binary. Two ways:
   - From a terminal **outside** herdr: `herdr server stop && herdr`. Kills every
     pane process. Layout is restored from `~/.config/herdr/session.json`.
   - From **inside** herdr (panes and their processes survive):

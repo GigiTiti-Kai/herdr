@@ -40,7 +40,12 @@ impl App {
     ) -> String {
         use crate::app::api::responses::{encode_error, encode_success};
 
-        let width = clamp_dock_width(params.width, self.dock_terminal_area().width);
+        // terminal_area already lacks the open dock's column; clamp against the area it is cut from.
+        let area_width = match self.state.view.dock_area.width {
+            0 => self.dock_terminal_area().width,
+            width => width,
+        };
+        let width = clamp_dock_width(params.width, area_width);
         let Some(dock) = self.state.dock_pane.as_mut() else {
             return encode_error(id, "dock_not_found", "the dock pane is not open");
         };

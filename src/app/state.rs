@@ -687,7 +687,10 @@ impl Palette {
 
 /// Geometry for the server-rendered active-tab pane surface.
 pub struct ViewState {
+    /// The area tab layouts use: what is left of the dock column.
     pub terminal_area: Rect,
+    /// The area the dock column is cut from: the tab area plus the dock.
+    pub dock_area: Rect,
     pub pane_infos: Vec<PaneInfo>,
 }
 
@@ -1067,6 +1070,7 @@ impl AppState {
             product_announcement: None,
             view: ViewState {
                 terminal_area: Rect::default(),
+                dock_area: Rect::default(),
                 pane_infos: Vec::new(),
             },
             update_available: None,

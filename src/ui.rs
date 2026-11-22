@@ -111,6 +111,7 @@ fn compute_view_internal(
     // Tab geometry readers (splits, edges, directional focus) see the area left of the dock.
     app.view = crate::app::ViewState {
         terminal_area: dock_tab_area(app, area),
+        dock_area: area,
         pane_infos,
     };
 }

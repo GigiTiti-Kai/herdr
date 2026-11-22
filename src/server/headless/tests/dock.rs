@@ -474,6 +474,57 @@ async fn dock_focus_returns_to_tiled_pane_on_close() {
 }
 
 #[tokio::test]
+async fn dock_set_width_widens_the_open_dock_from_a_shell_client() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("dock-width");
+    let pane = workspace.tabs[0].root_pane;
+    workspace.insert_test_runtime(
+        pane,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"TILED"),
+    );
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let (control, render) = connect_matching_test_shell(&mut server, 71);
+    let _ = control.recv().expect("snapshot");
+    server.app.install_test_dock_runtime(
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(20, 23, b"DOCK"),
+        Some(crate::popup_size::PopupSize::Percent(30)),
+    );
+    server.render_and_stream();
+    let before = recv_pane_surface(&render, "surface with dock");
+    assert_eq!(dock_surface_pane(&before).unwrap().rect.width, 24);
+
+    // The tab area is 56 columns here; the clamp must use the 80 the dock is cut from.
+    let response = shell_request(
+        &mut server,
+        71,
+        crate::api::schema::Method::DockSetWidth(crate::api::schema::DockSetWidthParams {
+            width: 40,
+        }),
+    );
+    assert_eq!(response["result"]["type"], "dock_width_set", "{response}");
+    assert_eq!(response["result"]["width"], 40, "{response}");
+    server.render_and_stream();
+    let after = recv_pane_surface(&render, "surface after dock.set_width");
+    let dock = dock_surface_pane(&after).unwrap();
+    assert_eq!((dock.rect.x, dock.rect.width), (40, 40));
+
+    let response = shell_request(
+        &mut server,
+        71,
+        crate::api::schema::Method::DockSetWidth(crate::api::schema::DockSetWidthParams {
+            width: 70,
+        }),
+    );
+    assert_eq!(response["result"]["width"], 60, "the tabs keep 20 columns");
+
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
 async fn popup_takes_input_over_focused_dock() {
     let mut server = test_headless_server();
     let mut workspace = crate::workspace::Workspace::test_new("dock-popup");

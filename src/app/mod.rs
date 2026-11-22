@@ -520,6 +520,7 @@ impl App {
             }),
             view: state::ViewState {
                 terminal_area: Rect::default(),
+                dock_area: Rect::default(),
                 pane_infos: Vec::new(),
             },
             update_available,

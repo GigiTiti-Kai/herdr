@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install the fork binary built by GitHub Actions, instead of building locally.
-#   fork/fetch-install.sh            -> newest unexpired linux artifact built from dev's head (on GitHub)
+#   fork/fetch-install.sh            -> newest successful run with an unexpired linux artifact of dev's head (on GitHub)
 #   fork/fetch-install.sh <run-id>   -> that run, whatever commit it built
 # Start a build with:
 #   gh workflow run build-artifacts-manual.yml -R GigiTiti-Kai/herdr --ref dev -f build_group=linux
@@ -24,9 +24,15 @@ if [ -z "$run" ]; then
     head="$(gh api "repos/$slug/branches/dev" --jq .commit.sha)"
     runs="$(gh api --paginate "repos/$slug/actions/artifacts?name=$artifact&per_page=100" \
         --jq ".artifacts[] | select((.expired | not) and .workflow_run.head_sha == \"$head\") | .workflow_run.id")"
-    run="${runs%%$'\n'*}"
+    # Of those, the newest run that succeeded as a whole.
+    for id in $runs; do
+        if [ "$(gh run view "$id" -R "$slug" --json conclusion --jq .conclusion)" = success ]; then
+            run="$id"
+            break
+        fi
+    done
     if [ -z "$run" ]; then
-        echo "no unexpired $artifact from $workflow for dev's head ${head:0:8}; start a build or pass a run id" >&2
+        echo "no successful $workflow run with an unexpired $artifact for dev's head ${head:0:8}; start a build or pass a run id" >&2
         exit 1
     fi
 fi
@@ -69,4 +75,4 @@ fi
 # rename(2) replaces the path, so replacing a running binary is safe.
 mv -fT "$new" "$dest"
 "$dest" --version
-echo "installed run $run ($sha). preserve running panes with: herdr server live-handoff --import-exe $dest"
+echo "installed run $run ($sha). preserve running panes with: herdr server live-handoff --import-exe $(printf %q "$dest")"

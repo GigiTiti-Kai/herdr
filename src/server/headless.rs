@@ -3143,10 +3143,9 @@ impl HeadlessServer {
                 .get(&client_id)
                 .is_some_and(|client| matches!(client.mode, ClientConnectionMode::ClientShell))
         }) {
-            self.app.state.view.terminal_area = crate::ui::dock_tab_area(
-                &self.app.state,
-                Rect::new(0, 0, self.effective_size.0, self.effective_size.1),
-            );
+            let area = Rect::new(0, 0, self.effective_size.0, self.effective_size.1);
+            self.app.state.view.terminal_area = crate::ui::dock_tab_area(&self.app.state, area);
+            self.app.state.view.dock_area = area;
         }
         let mut response = if matches!(
             &msg.request.method,

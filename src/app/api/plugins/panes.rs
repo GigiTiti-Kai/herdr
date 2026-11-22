@@ -59,7 +59,7 @@ impl App {
             &pane.command,
             Some(cwd),
             extra_env,
-            params.width.or(pane.width),
+            params.width.or(self.state.dock_last_width).or(pane.width),
         ) {
             return encode_error(id, "plugin_pane_open_failed", err.to_string());
         }

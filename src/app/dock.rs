@@ -9,7 +9,56 @@ use crate::terminal::{TerminalId, TerminalRuntime, TerminalState};
 /// Public id of the session-wide dock pane.
 pub(crate) const DOCK_PANE_ID: &str = "dock";
 
+/// Narrowest dock column and tab area a dock drag may leave.
+const MIN_DOCK_COLS: u16 = 20;
+const MIN_TAB_COLS: u16 = 20;
+
+/// Dock width in columns, keeping both the dock and the tab area at least 20 columns
+/// when the screen allows it. Narrower screens fall back to `dock_column_rects`.
+pub(crate) fn clamp_dock_width(requested: u16, area_width: u16) -> u16 {
+    requested
+        .min(area_width.saturating_sub(MIN_TAB_COLS))
+        .max(MIN_DOCK_COLS)
+}
+
 impl App {
+    /// The area the dock column is cut from; the headless size until a view exists.
+    fn dock_terminal_area(&self) -> ratatui::layout::Rect {
+        let area = self.state.view.terminal_area;
+        if area.width >= 4 && area.height >= 4 {
+            area
+        } else {
+            let (cols, rows) = self.state.headless_size;
+            ratatui::layout::Rect::new(0, 0, cols, rows)
+        }
+    }
+
+    pub(crate) fn handle_dock_set_width(
+        &mut self,
+        id: String,
+        params: crate::api::schema::DockSetWidthParams,
+    ) -> String {
+        use crate::app::api::responses::{encode_error, encode_success};
+
+        // terminal_area already lacks the open dock's column; clamp against the area it is cut from.
+        let area_width = match self.state.view.dock_area.width {
+            0 => self.dock_terminal_area().width,
+            width => width,
+        };
+        let width = clamp_dock_width(params.width, area_width);
+        let Some(dock) = self.state.dock_pane.as_mut() else {
+            return encode_error(id, "dock_not_found", "the dock pane is not open");
+        };
+        dock.width = Some(PopupSize::Cells(width));
+        self.state.dock_last_width = dock.width;
+        self.render_dirty.request_generic();
+        self.render_notify.notify_one();
+        encode_success(
+            id,
+            crate::api::schema::ResponseResult::DockWidthSet { width },
+        )
+    }
+
     pub(crate) fn close_dock_pane(&mut self) -> bool {
         let Some(dock) = self.state.dock_pane.take() else {
             return false;
@@ -83,15 +132,8 @@ impl App {
             return Err(std::io::Error::other("dock already open"));
         }
         let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
-        let terminal_area = if self.state.view.terminal_area.width >= 4
-            && self.state.view.terminal_area.height >= 4
-        {
-            self.state.view.terminal_area
-        } else {
-            let (cols, rows) = self.state.headless_size;
-            ratatui::layout::Rect::new(0, 0, cols, rows)
-        };
-        let Some((_, inner)) = crate::ui::dock_column_rects(width, terminal_area) else {
+        let Some((_, inner)) = crate::ui::dock_column_rects(width, self.dock_terminal_area())
+        else {
             return Err(std::io::Error::other("terminal area too small for dock"));
         };
         let pane_id = PaneId::alloc();
@@ -151,5 +193,72 @@ impl App {
             plugin: None,
         });
         (pane_id, terminal_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::schema::{DockSetWidthParams, ErrorResponse, ResponseResult, SuccessResponse};
+
+    fn test_app() -> App {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.view.terminal_area = ratatui::layout::Rect::new(0, 0, 200, 40);
+        app
+    }
+
+    #[test]
+    fn clamp_dock_width_keeps_both_sides_at_least_twenty() {
+        assert_eq!(clamp_dock_width(5, 200), 20);
+        assert_eq!(clamp_dock_width(190, 200), 180);
+        assert_eq!(clamp_dock_width(60, 200), 60);
+    }
+
+    #[tokio::test]
+    async fn dock_set_width_sets_cells_and_remembers() {
+        let mut app = test_app();
+        app.install_test_dock_runtime(
+            TerminalRuntime::test_with_screen_bytes(60, 40, b"dock"),
+            Some(PopupSize::Percent(30)),
+        );
+
+        let response = app.handle_dock_set_width("w".into(), DockSetWidthParams { width: 70 });
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.result, ResponseResult::DockWidthSet { width: 70 });
+        assert_eq!(
+            app.state.dock_pane.as_ref().unwrap().width,
+            Some(PopupSize::Cells(70))
+        );
+        assert_eq!(app.state.dock_last_width, Some(PopupSize::Cells(70)));
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+    }
+
+    #[test]
+    fn dock_set_width_without_dock_is_not_found() {
+        let mut app = test_app();
+
+        let response = app.handle_dock_set_width("w".into(), DockSetWidthParams { width: 70 });
+
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "dock_not_found");
+        assert_eq!(app.state.dock_last_width, None);
+    }
+
+    #[test]
+    fn remembered_dock_width_survives_a_narrow_terminal() {
+        let area = ratatui::layout::Rect::new(0, 0, 60, 20);
+        let (outer, _) = crate::ui::dock_column_rects(Some(PopupSize::Cells(70)), area).unwrap();
+        assert!(outer.x >= 1, "the tab area keeps at least one column");
+        assert_eq!(outer.right(), area.right());
     }
 }

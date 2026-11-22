@@ -1857,6 +1857,90 @@ command = ["sh", "-c", "printf '%s|%s|%s' ${{HERDR_PANE_ID-unset}} ${{HERDR_TAB_
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reopened_dock_uses_the_remembered_width() {
+        let mut app = test_app();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("plugin-dock-width")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = crate::app::Mode::Terminal;
+        app.state.view.terminal_area = ratatui::layout::Rect::new(0, 0, 200, 30);
+        let root = unique_temp_path("plugin-pane-dock-width");
+        write_manifest_content(
+            &root,
+            r#"
+id = "example.dock"
+name = "Dock Plugin"
+version = "0.1.0"
+min_herdr_version = "0.6.10"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "board"
+title = "Work board"
+command = ["sh", "-c", "sleep 5"]
+"#,
+        );
+        link_manifest(&mut app, &root);
+        let open = |app: &mut App, width| {
+            let response = app.handle_api_request(Request {
+                id: "dock-open".into(),
+                method: Method::PluginPaneOpen(PluginPaneOpenParams {
+                    plugin_id: "example.dock".into(),
+                    entrypoint: "board".into(),
+                    placement: Some(PluginPanePlacement::Dock),
+                    width,
+                    height: None,
+                    workspace_id: None,
+                    target_pane_id: None,
+                    direction: None,
+                    cwd: None,
+                    focus: false,
+                    env: std::collections::HashMap::new(),
+                }),
+            });
+            assert_eq!(response_result(&response), ResponseResult::Ok {});
+            app.state.dock_pane.as_ref().expect("dock opened").width
+        };
+        let close = |app: &mut App| {
+            let response = app.handle_api_request(Request {
+                id: "dock-close".into(),
+                method: Method::PluginPaneClose(PluginPaneCloseParams {
+                    pane_id: "dock".into(),
+                }),
+            });
+            assert!(app.state.dock_pane.is_none(), "{response}");
+        };
+
+        assert_eq!(open(&mut app, None), None, "the manifest has no width");
+        let set = app.handle_api_request(Request {
+            id: "dock-width".into(),
+            method: Method::DockSetWidth(crate::api::schema::DockSetWidthParams { width: 70 }),
+        });
+        assert_eq!(
+            response_result(&set),
+            ResponseResult::DockWidthSet { width: 70 }
+        );
+        close(&mut app);
+        assert_eq!(
+            open(&mut app, None),
+            Some(crate::popup_size::PopupSize::Cells(70))
+        );
+        close(&mut app);
+        assert_eq!(
+            open(&mut app, Some(crate::popup_size::PopupSize::Percent(40))),
+            Some(crate::popup_size::PopupSize::Percent(40)),
+            "--width still wins"
+        );
+
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     async fn windows_plugin_pane_commands_resolve_from_plugin_root_with_cwd_override() {

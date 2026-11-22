@@ -319,6 +319,124 @@ fn pane_split_drag_uses_projected_handle_and_stable_tab_path() {
     assert!(state.chrome_drag.is_none());
 }
 
+fn docked_state() -> (ClientShellState, Rect) {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let mut pane_surface = surface();
+    let mut dock = pane_surface.panes[0].clone();
+    dock.pane_id = "dock".into();
+    dock.focused = false;
+    dock.rect = SurfaceRect {
+        x: 60,
+        y: 0,
+        width: 20,
+        height: 19,
+    };
+    dock.inner_rect = SurfaceRect {
+        x: 61,
+        y: 0,
+        width: 19,
+        height: 19,
+    };
+    pane_surface.panes.push(dock);
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("docked pane surface");
+    let rect = state
+        .hits
+        .panes
+        .iter()
+        .find(|hit| hit.pane_id == "dock")
+        .expect("dock hit")
+        .rect;
+    (state, rect)
+}
+
+fn left_mouse(kind: MouseEventKind, column: u16, row: u16) -> RawInputEvent {
+    RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::empty(),
+    })
+}
+
+fn dock_widths(actions: &[ClientShellAction]) -> Vec<u16> {
+    actions
+        .iter()
+        .filter_map(|action| match action {
+            ClientShellAction::Endpoint { request, .. } => match &request.method {
+                crate::api::schema::Method::DockSetWidth(params) => Some(params.width),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn dock_separator_drag_sends_dock_width() {
+    let (mut state, dock) = docked_state();
+    let row = dock.y + 2;
+
+    let press = state.handle_raw_events(vec![left_mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        dock.x,
+        row,
+    )]);
+    assert!(matches!(
+        state.chrome_drag,
+        Some(ClientChromeDrag::DockWidth { .. })
+    ));
+    assert!(dock_widths(&press.actions).is_empty());
+
+    let drag = state.handle_raw_events(vec![left_mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        dock.x - 10,
+        row,
+    )]);
+    assert_eq!(dock_widths(&drag.actions), vec![30]);
+
+    let release = state.handle_raw_events(vec![left_mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        dock.x - 10,
+        row,
+    )]);
+    assert!(
+        release.actions.is_empty(),
+        "the last width was already sent"
+    );
+    assert!(state.chrome_drag.is_none());
+}
+
+#[test]
+fn dock_separator_click_without_drag_keeps_width() {
+    let (mut state, dock) = docked_state();
+    let row = dock.y + 2;
+
+    let press = state.handle_raw_events(vec![left_mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        dock.x,
+        row,
+    )]);
+    let release = state.handle_raw_events(vec![left_mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        dock.x,
+        row,
+    )]);
+
+    assert!(dock_widths(&press.actions).is_empty());
+    assert!(dock_widths(&release.actions).is_empty());
+    assert!(matches!(
+        &press.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                &request.method,
+                crate::api::schema::Method::PaneFocus(target) if target.pane_id == "dock"
+            )
+    ));
+    assert!(state.chrome_drag.is_none());
+}
+
 #[test]
 fn disabled_mouse_chrome_keeps_tab_wheel_but_removes_split_drag_hits() {
     let mut config = Config::default();

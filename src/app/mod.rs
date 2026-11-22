@@ -520,6 +520,7 @@ impl App {
             }),
             view: state::ViewState {
                 terminal_area: Rect::default(),
+                dock_area: Rect::default(),
                 pane_infos: Vec::new(),
             },
             update_available,
@@ -572,6 +573,7 @@ impl App {
             plugin_panes: std::collections::HashMap::new(),
             popup_pane: None,
             dock_pane: None,
+            dock_last_width: None,
             dock_focused: false,
             plugin_command_logs: Vec::new(),
             next_plugin_command_log_id: 1,

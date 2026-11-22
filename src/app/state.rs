@@ -687,7 +687,10 @@ impl Palette {
 
 /// Geometry for the server-rendered active-tab pane surface.
 pub struct ViewState {
+    /// The area tab layouts use: what is left of the dock column.
     pub terminal_area: Rect,
+    /// The area the dock column is cut from: the tab area plus the dock.
+    pub dock_area: Rect,
     pub pane_infos: Vec<PaneInfo>,
 }
 
@@ -887,6 +890,8 @@ pub struct AppState {
     pub(crate) popup_pane: Option<PopupPaneState>,
     /// Session-wide right column, addressed publicly as `dock`.
     pub(crate) dock_pane: Option<DockPaneState>,
+    /// Width of the last dock drag; reused when the dock reopens without `--width`. Memory only.
+    pub(crate) dock_last_width: Option<crate::popup_size::PopupSize>,
     /// Whether keyboard input targets the dock instead of the tiled focused pane.
     pub(crate) dock_focused: bool,
     /// Recent plugin action/event command executions.
@@ -1065,6 +1070,7 @@ impl AppState {
             product_announcement: None,
             view: ViewState {
                 terminal_area: Rect::default(),
+                dock_area: Rect::default(),
                 pane_infos: Vec::new(),
             },
             update_available: None,
@@ -1128,6 +1134,7 @@ impl AppState {
             plugin_panes: std::collections::HashMap::new(),
             popup_pane: None,
             dock_pane: None,
+            dock_last_width: None,
             dock_focused: false,
             plugin_command_logs: Vec::new(),
             next_plugin_command_log_id: 1,

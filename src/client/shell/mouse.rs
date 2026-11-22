@@ -438,6 +438,15 @@ impl ClientShellState {
         )
     }
 
+    /// Dock width that puts its separator at `column`; `None` once the dock is gone.
+    fn dock_drag_width(&self, column: u16) -> Option<u16> {
+        self.hits
+            .panes
+            .iter()
+            .find(|hit| hit.pane_id == crate::app::dock::DOCK_PANE_ID)
+            .map(|hit| hit.rect.right().saturating_sub(column))
+    }
+
     fn pane_split_ratio(hit: &PaneSplitHit, grab_offset: i32, point: (u16, u16)) -> f32 {
         let (pointer, origin, length) = match hit.direction {
             crate::protocol::PaneSurfaceSplitDirection::Horizontal => {
@@ -1192,6 +1201,34 @@ impl ClientShellState {
                     }
                     return;
                 }
+                Some(ClientChromeDrag::DockWidth {
+                    last_sent_width,
+                    last_sent_at,
+                }) => {
+                    let (last_sent_width, last_sent_at) = (*last_sent_width, *last_sent_at);
+                    let Some(width) = self.dock_drag_width(mouse.column) else {
+                        self.chrome_drag = None;
+                        return;
+                    };
+                    let now = std::time::Instant::now();
+                    let should_send = last_sent_width != Some(width)
+                        && last_sent_at.is_none_or(|last| {
+                            now.duration_since(last) >= std::time::Duration::from_millis(33)
+                        });
+                    if should_send {
+                        self.chrome_drag = Some(ClientChromeDrag::DockWidth {
+                            last_sent_width: Some(width),
+                            last_sent_at: Some(now),
+                        });
+                        self.push_endpoint_method(
+                            crate::api::schema::Method::DockSetWidth(
+                                crate::api::schema::DockSetWidthParams { width },
+                            ),
+                            outcome,
+                        );
+                    }
+                    return;
+                }
                 Some(ClientChromeDrag::Tab { .. }) => {
                     let insert_index = self.tab_drop_index_at(point);
                     if let Some(ClientChromeDrag::Tab {
@@ -1355,6 +1392,29 @@ impl ClientShellState {
                                 ),
                                 outcome,
                             );
+                        }
+                    }
+                    ClientChromeDrag::DockWidth {
+                        last_sent_width, ..
+                    } => {
+                        let current = self
+                            .hits
+                            .panes
+                            .iter()
+                            .find(|hit| hit.pane_id == crate::app::dock::DOCK_PANE_ID)
+                            .map(|hit| hit.rect.width);
+                        if let (Some(width), Some(current)) =
+                            (self.dock_drag_width(mouse.column), current)
+                        {
+                            // A plain click on the separator sends nothing.
+                            if last_sent_width.map_or(width != current, |sent| sent != width) {
+                                self.push_endpoint_method(
+                                    crate::api::schema::Method::DockSetWidth(
+                                        crate::api::schema::DockSetWidthParams { width },
+                                    ),
+                                    outcome,
+                                );
+                            }
                         }
                     }
                     ClientChromeDrag::SidebarWidth | ClientChromeDrag::SidebarSection => {
@@ -2264,6 +2324,29 @@ impl ClientShellState {
                     {
                         self.push_pane_scroll_offset(hit.pane_id, offset, outcome);
                     }
+                    return;
+                }
+                let dock_separator = self.config.mouse_capture
+                    && self.supports_endpoint_method(&crate::api::schema::Method::DockSetWidth(
+                        crate::api::schema::DockSetWidthParams { width: 0 },
+                    ))
+                    && self.hits.panes.iter().any(|hit| {
+                        hit.pane_id == crate::app::dock::DOCK_PANE_ID
+                            && mouse.column == hit.rect.x
+                            && super::contains(hit.rect, point)
+                    });
+                if dock_separator {
+                    self.chrome_drag = Some(ClientChromeDrag::DockWidth {
+                        last_sent_width: None,
+                        last_sent_at: None,
+                    });
+                    // Same as any click on the dock: it takes focus.
+                    self.push_endpoint_method(
+                        crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
+                            pane_id: crate::app::dock::DOCK_PANE_ID.to_owned(),
+                        }),
+                        outcome,
+                    );
                     return;
                 }
                 let split_hit = self

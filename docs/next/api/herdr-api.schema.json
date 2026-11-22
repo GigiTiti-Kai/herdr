@@ -1759,6 +1759,21 @@
           ],
           "type": "object"
         },
+        "DockSetWidthParams": {
+          "properties": {
+            "width": {
+              "description": "Columns of the dock column, its left separator included.",
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "width"
+          ],
+          "type": "object"
+        },
         "EmptyParams": {
           "type": "object"
         },
@@ -5570,6 +5585,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/LayoutSetSplitRatioParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "dock.set_width",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/DockSetWidthParams"
             }
           },
           "required": [
@@ -9717,6 +9748,25 @@
               "required": [
                 "type",
                 "layout"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "dock_width_set",
+                  "type": "string"
+                },
+                "width": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "type",
+                "width"
               ],
               "type": "object"
             },

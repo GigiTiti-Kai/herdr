@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install the fork binary built by GitHub Actions, instead of building locally.
-#   fork/fetch-install.sh            -> newest successful manual run that built dev's head (on GitHub) for linux
+#   fork/fetch-install.sh            -> newest unexpired linux artifact built from dev's head (on GitHub)
 #   fork/fetch-install.sh <run-id>   -> that run, whatever commit it built
 # Start a build with:
 #   gh workflow run build-artifacts-manual.yml -R GigiTiti-Kai/herdr --ref dev -f build_group=linux
@@ -15,23 +15,16 @@ name=herdr-linux-x86_64
 artifact="$name-ReleaseSafe-simd-false"
 dest="${HERDR_INSTALL_DEST:-$HOME/.local/bin/herdr}"
 
-has_artifact() {
-    [ -n "$(gh api "repos/$slug/actions/runs/$1/artifacts" --jq ".artifacts[] | select(.name == \"$artifact\" and (.expired | not)) | .id")" ]
-}
-
 run="${1:-}"
 if [ -z "$run" ]; then
     # Only a build of dev's current head: an older one would pass every check below.
-    # Runs of that commit without the linux artifact (a macos-only build) are skipped.
+    # Ask for the artifact itself (newest first, every page), so runs without it (macos-only) never hide it.
     head="$(gh api "repos/$slug/branches/dev" --jq .commit.sha)"
-    for id in $(gh run list -R "$slug" --workflow "$workflow" --commit "$head" --status success --limit 20 --json databaseId --jq '.[].databaseId'); do
-        if has_artifact "$id"; then
-            run="$id"
-            break
-        fi
-    done
+    runs="$(gh api --paginate "repos/$slug/actions/artifacts?name=$artifact&per_page=100" \
+        --jq ".artifacts[] | select((.expired | not) and .workflow_run.head_sha == \"$head\") | .workflow_run.id")"
+    run="${runs%%$'\n'*}"
     if [ -z "$run" ]; then
-        echo "no successful $workflow run with $artifact for dev's head ${head:0:8}; start a build or pass a run id" >&2
+        echo "no unexpired $artifact from $workflow for dev's head ${head:0:8}; start a build or pass a run id" >&2
         exit 1
     fi
 fi
@@ -39,7 +32,8 @@ sha="$(gh run view "$run" -R "$slug" --json headSha --jq .headSha)"
 
 tmp="$(mktemp -d)"
 new="$dest.new.$$"
-trap 'rm -rf "$tmp"; rm -f "$new"' EXIT
+prev="$dest.prev.$$"
+trap 'rm -rf "$tmp"; rm -f "$new" "$prev"' EXIT
 gh run download "$run" -R "$slug" -n "$artifact" -D "$tmp"
 
 # The artifact must be the build of the run's commit, and the binary must match its own sha256 line.
@@ -65,10 +59,12 @@ fi
 install -m755 "$tmp/$name" "$new"
 cmp -s "$tmp/$name" "$new"
 # Keep the previous binary: roll back with `mv $dest.prev $dest`.
+# Copied to a fresh file and renamed, so a symlink at $dest.prev is replaced, never written through.
 if [ -e "$dest" ]; then
-    cp -p "$dest" "$dest.prev"
+    cp -p "$dest" "$prev"
+    mv -fT "$prev" "$dest.prev"
 fi
 # rename(2) replaces the path, so replacing a running binary is safe.
-mv -f "$new" "$dest"
+mv -fT "$new" "$dest"
 "$dest" --version
 echo "installed run $run ($sha). preserve running panes with: herdr server live-handoff --import-exe $dest"

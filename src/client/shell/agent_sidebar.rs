@@ -44,30 +44,55 @@ pub(super) fn mixed_repo_spaces(snapshot: &ClientShellSnapshot) -> HashSet<&str>
         .iter()
         .map(|agent| agent.pane_id.as_str())
         .collect::<HashSet<_>>();
+    let labels = snapshot
+        .workspaces
+        .iter()
+        .map(|workspace| (workspace.workspace_id.as_str(), workspace.label.as_str()))
+        .collect::<HashMap<_, _>>();
     let mut first_repo = HashMap::new();
     let mut mixed = HashSet::new();
-    for pane in &snapshot.panes {
-        let Some(git) = pane
-            .git_context
-            .as_ref()
-            .filter(|_| agent_panes.contains(pane.pane_id.as_str()))
-        else {
-            continue;
+    for pane in snapshot
+        .panes
+        .iter()
+        .filter(|pane| agent_panes.contains(pane.pane_id.as_str()))
+    {
+        // A pane outside any repository counts, as one more repository, only
+        // when the space title is named after its folder.
+        let repo = match &pane.git_context {
+            Some(git) => Some(git.repo_key.as_str()),
+            None if labels
+                .get(pane.workspace_id.as_str())
+                .is_some_and(|label| runs_in_title_folder(pane, label)) =>
+            {
+                None
+            }
+            None => continue,
         };
-        let first = first_repo
-            .entry(pane.workspace_id.as_str())
-            .or_insert(git.repo_key.as_str());
-        if *first != git.repo_key {
+        let first = first_repo.entry(pane.workspace_id.as_str()).or_insert(repo);
+        if *first != repo {
             mixed.insert(pane.workspace_id.as_str());
         }
     }
     mixed
 }
 
+/// The pane runs in the folder the space title is named after, as the server
+/// names a space outside any repository.
+// shortcut: the home folder (title `~`) and Windows paths of a remote machine
+// never match; compare those forms if such a space shows up.
+fn runs_in_title_folder(pane: &crate::protocol::ClientShellPane, label: &str) -> bool {
+    pane.foreground_cwd
+        .as_deref()
+        .or(pane.cwd.as_deref())
+        .and_then(|cwd| std::path::Path::new(cwd).file_name())
+        .is_some_and(|name| name == label)
+}
+
 /// In a space whose agents span several repositories, name the repository
 /// above each run of cards that leaves the one before it. The space title
 /// stands for the repository it is named after; cards outside any repository
-/// form their own run under `+ no repo`. Each row comes with a scope
+/// form their own run under `+ no repo`, which the title stands for when it is
+/// named after their folder. Each row comes with a scope
 /// that keeps equal space ids of different machines apart.
 pub(super) fn insert_repo_headings<'a, S: PartialEq>(
     rows: impl IntoIterator<Item = (S, &'a mut AgentRow)>,
@@ -687,7 +712,8 @@ pub(super) fn agent_row(
             None => AgentRepo {
                 key: None,
                 name: "no repo".into(),
-                is_space_label: false,
+                is_space_label: pane
+                    .is_some_and(|pane| runs_in_title_folder(pane, &workspace.label)),
             },
         });
     let state_text = labels
@@ -1330,6 +1356,58 @@ fold_toggle_token = "$group"
         );
         // Panes outside any repository alone do not make a space mixed.
         assert!(headings(&[Some(SCHEDULER), None, Some(SCHEDULER)]).is_empty());
+    }
+
+    /// The space `chat`, opened in a folder outside any repository, with the
+    /// agents of `repo_space` and those outside any repository in that folder.
+    fn chat_space(repos: &[Option<&str>]) -> (ClientShellSnapshot, ClientShellConfig) {
+        let (mut snapshot, config) = repo_space(repos);
+        snapshot.workspaces[0].label = "chat".into();
+        for token in snapshot
+            .agents
+            .iter_mut()
+            .flat_map(|agent| &mut agent.tokens)
+        {
+            if token.0 == "group" {
+                token.1 = "chat".into();
+            }
+        }
+        for pane in snapshot
+            .panes
+            .iter_mut()
+            .filter(|pane| pane.git_context.is_none())
+        {
+            pane.cwd = Some("/work/chat".into());
+            pane.foreground_cwd = Some("/work/chat".into());
+        }
+        (snapshot, config)
+    }
+
+    #[test]
+    fn mixed_space_titled_by_a_folder_outside_any_repository_heads_only_the_repository() {
+        let (snapshot, config) = chat_space(&[None, Some("dotfiles")]);
+        assert_eq!(
+            panel_lines(&snapshot, &config, None),
+            [
+                " chat".to_string(),
+                "   Claude".into(),
+                "   idle".into(),
+                format!(" {GAP}"),
+                " + dotfiles".into(),
+                "   Claude".into(),
+                "   idle".into(),
+                "   wt:rippling-juggling-crystal".into(),
+            ]
+        );
+        // Like the title repository, the folder is named again when it follows another.
+        let (snapshot, config) = chat_space(&[Some("dotfiles"), None]);
+        assert_eq!(
+            panel_lines(&snapshot, &config, None)
+                .into_iter()
+                .filter(|line| line.starts_with(" + "))
+                .collect::<Vec<_>>(),
+            [" + dotfiles".to_string(), " + no repo".to_string()]
+        );
     }
 
     #[test]

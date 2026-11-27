@@ -27,7 +27,7 @@ pub(crate) enum ResolvedTokenKind {
 }
 
 impl ResolvedTokenKind {
-    fn text_value(&self) -> Option<&str> {
+    pub(super) fn text_value(&self) -> Option<&str> {
         match self {
             Self::StateText(value)
             | Self::BackgroundShells(value)

@@ -117,6 +117,7 @@ pub(crate) enum TokenJoin {
     Space,
 }
 
+#[allow(clippy::too_many_arguments)] // one argument per style and layout input of a row
 pub(crate) fn resolved_token_spans(
     resolved: &[ResolvedToken],
     state_icon: (&str, Style),
@@ -127,6 +128,63 @@ pub(crate) fn resolved_token_spans(
     palette: &Palette,
     max_width: usize,
     join: TokenJoin,
+) -> Vec<Span<'static>> {
+    token_spans(
+        resolved,
+        state_icon,
+        state_text_style,
+        workspace_style,
+        secondary_style,
+        custom_style,
+        palette,
+        max_width,
+        join,
+        false,
+    )
+}
+
+/// As [`resolved_token_spans`], but the width goes to the tokens in order and the row is cut at
+/// its right edge: the leading tokens (a state word, a task number) stay whole. Folded agent rows.
+/// A row with background shells and `state_text` keeps the shared fill, which already protects
+/// its state word.
+#[allow(clippy::too_many_arguments)] // mirrors resolved_token_spans
+pub(crate) fn resolved_token_spans_in_order(
+    resolved: &[ResolvedToken],
+    state_icon: (&str, Style),
+    state_text_style: Style,
+    workspace_style: Style,
+    secondary_style: Style,
+    custom_style: Style,
+    palette: &Palette,
+    max_width: usize,
+    join: TokenJoin,
+) -> Vec<Span<'static>> {
+    token_spans(
+        resolved,
+        state_icon,
+        state_text_style,
+        workspace_style,
+        secondary_style,
+        custom_style,
+        palette,
+        max_width,
+        join,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // the two public entries above plus the fill order
+fn token_spans(
+    resolved: &[ResolvedToken],
+    state_icon: (&str, Style),
+    state_text_style: Style,
+    workspace_style: Style,
+    secondary_style: Style,
+    custom_style: Style,
+    palette: &Palette,
+    max_width: usize,
+    join: TokenJoin,
+    in_order: bool,
 ) -> Vec<Span<'static>> {
     let mut has_background_shells = false;
     let join_separator = |previous: &ResolvedToken, current: &ResolvedToken| match join {
@@ -268,6 +326,45 @@ pub(crate) fn resolved_token_spans(
     let mut remaining = max_width
         .saturating_sub(separator_width + fixed_width)
         .saturating_sub(minimum);
+    if in_order && critical_state.is_none() {
+        // Whole tokens from the left while they fit; the first that does not gets what is left
+        // (two cells at least, else it goes) and the ones after it go.
+        active.iter_mut().for_each(|active| *active = false);
+        budgets.iter_mut().for_each(|budget| *budget = 0);
+        let mut used = 0;
+        let mut previous: Option<usize> = None;
+        for index in 0..resolved.len() {
+            let separator = previous.map_or(0, |previous| {
+                display_width(join_separator(&resolved[previous], &resolved[index]))
+            });
+            let need = separator + fixed_widths[index] + flexible_widths[index];
+            if used + need <= max_width {
+                active[index] = true;
+                budgets[index] = flexible_widths[index];
+                used += need;
+                previous = Some(index);
+                continue;
+            }
+            let room = max_width.saturating_sub(used + separator + fixed_widths[index]);
+            // Kept only when some of its text survives the cut, not a lone `…` (a wide first
+            // character needs three cells).
+            let shows_text = resolved[index]
+                .kind
+                .text_value()
+                .is_some_and(|text| truncate_end(text, room).chars().count() > 1);
+            if flexible_widths[index] > 0 && shows_text {
+                active[index] = true;
+                budgets[index] = room;
+            }
+            break;
+        }
+        remaining = 0;
+    }
+    let visible_indices = active
+        .iter()
+        .enumerate()
+        .filter_map(|(index, active)| active.then_some(index))
+        .collect::<Vec<_>>();
     while remaining > 0 {
         let mut grew = false;
         for (budget, width) in budgets.iter_mut().zip(&flexible_widths) {

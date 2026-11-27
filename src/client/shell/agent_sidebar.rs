@@ -834,7 +834,13 @@ pub(super) fn render_agent_row(
             3
         };
         let mut spans = vec![ratatui::text::Span::raw(" ".repeat(indent))];
-        spans.extend(crate::ui::resolved_token_spans(
+        // A folded card is one line: its leading tokens stay whole and the cut falls at the end.
+        let token_spans = if row.folded {
+            crate::ui::resolved_token_spans_in_order
+        } else {
+            crate::ui::resolved_token_spans
+        };
+        spans.extend(token_spans(
             tokens,
             icon,
             status_style,
@@ -1275,10 +1281,19 @@ fold_toggle_token = "$group"
         config: &ClientShellConfig,
         folds: Option<&HashMap<String, bool>>,
     ) -> Vec<String> {
+        panel_lines_at(snapshot, config, folds, 47)
+    }
+
+    fn panel_lines_at(
+        snapshot: &ClientShellSnapshot,
+        config: &ClientShellConfig,
+        folds: Option<&HashMap<String, bool>>,
+        width: u16,
+    ) -> Vec<String> {
         agent_rows(snapshot, config, None, folds)
             .iter()
             .flat_map(|row| {
-                let rect = Rect::new(0, 0, 47, row.rows.len().max(1) as u16);
+                let rect = Rect::new(0, 0, width, row.rows.len().max(1) as u16);
                 let mut buffer = Buffer::empty(rect);
                 render_agent_row(&mut buffer, rect, row, config);
                 (0..rect.height)
@@ -1678,6 +1693,47 @@ fold_toggle_token = "$group"
             lines.iter().any(|line| line.trim() == "custom"),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn a_narrow_folded_row_keeps_the_state_and_number_whole_and_cuts_the_title() {
+        let rows = r#"
+rows = [["$group"]]
+folded_rows = [["$group"], ["state_icon", "$agent_status", "$task_needs_you", "$task_ready", "$task", "$task_title", "$agent_name", "terminal_title_stripped"]]
+fold_toggle_token = "$group"
+"#;
+        let (snapshot, config) = token_space(1, rows, |_, agent| {
+            agent.agent_status = crate::api::schema::AgentStatus::Blocked;
+            agent.name = Some("sw-dotfiles-109".into());
+            agent.terminal_title_stripped = Some("judge.py の採点の穴4件（FLS-108 R#4）".into());
+            agent
+                .tokens
+                .push(("task_needs_you".into(), "FLS-109".into()));
+            agent.tokens.push((
+                "task_title".into(),
+                "逃がし先 10: ci-scaffold の eval の採点の穴4件を直す".into(),
+            ));
+        });
+        let folds = HashMap::from([("ws_1".to_string(), true)]);
+        let line_at = |width| panel_lines_at(&snapshot, &config, Some(&folds), width)[1].clone();
+        let line = line_at(28);
+        assert!(
+            line.replace(' ', "").contains("blocked·FLS-109·逃"),
+            "{line}"
+        );
+        // 27 leaves the title two cells: its wide first character does not fit before the `…`.
+        assert!(
+            line_at(27).trim_end().ends_with("FLS-109"),
+            "{}",
+            line_at(27)
+        );
+        for width in 20..=60 {
+            let line = line_at(width);
+            assert!(
+                !line.replace(' ', "").ends_with("·…"),
+                "no token is left as a lone mark at {width}: {line}"
+            );
+        }
     }
 
     #[test]

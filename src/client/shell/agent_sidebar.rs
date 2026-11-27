@@ -1715,17 +1715,25 @@ fold_toggle_token = "$group"
             ));
         });
         let folds = HashMap::from([("ws_1".to_string(), true)]);
-        let lines = panel_lines_at(&snapshot, &config, Some(&folds), 28);
-        let line = lines
-            .iter()
-            .find(|line| line.contains("FLS"))
-            .unwrap_or_else(|| panic!("{lines:?}"));
-        let packed = line.replace(' ', "");
-        assert!(packed.contains("blocked·FLS-109·逃"), "{line}");
+        let line_at = |width| panel_lines_at(&snapshot, &config, Some(&folds), width)[1].clone();
+        let line = line_at(28);
         assert!(
-            !packed.ends_with("·…"),
-            "no token is left as a lone mark: {line}"
+            line.replace(' ', "").contains("blocked·FLS-109·逃"),
+            "{line}"
         );
+        // 27 leaves the title two cells: its wide first character does not fit before the `…`.
+        assert!(
+            line_at(27).trim_end().ends_with("FLS-109"),
+            "{}",
+            line_at(27)
+        );
+        for width in 20..=60 {
+            let line = line_at(width);
+            assert!(
+                !line.replace(' ', "").ends_with("·…"),
+                "no token is left as a lone mark at {width}: {line}"
+            );
+        }
     }
 
     #[test]

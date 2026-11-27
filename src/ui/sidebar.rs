@@ -145,6 +145,8 @@ pub(crate) fn resolved_token_spans(
 
 /// As [`resolved_token_spans`], but the width goes to the tokens in order and the row is cut at
 /// its right edge: the leading tokens (a state word, a task number) stay whole. Folded agent rows.
+/// A row with background shells and `state_text` keeps the shared fill, which already protects
+/// its state word.
 #[allow(clippy::too_many_arguments)] // mirrors resolved_token_spans
 pub(crate) fn resolved_token_spans_in_order(
     resolved: &[ResolvedToken],
@@ -344,7 +346,13 @@ fn token_spans(
                 continue;
             }
             let room = max_width.saturating_sub(used + separator + fixed_widths[index]);
-            if flexible_widths[index] > 0 && room >= 2 {
+            // Kept only when some of its text survives the cut, not a lone `…` (a wide first
+            // character needs three cells).
+            let shows_text = resolved[index]
+                .kind
+                .text_value()
+                .is_some_and(|text| truncate_end(text, room).chars().count() > 1);
+            if flexible_widths[index] > 0 && shows_text {
                 active[index] = true;
                 budgets[index] = room;
             }

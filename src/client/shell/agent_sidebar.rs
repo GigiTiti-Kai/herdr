@@ -694,6 +694,15 @@ pub(super) fn agent_row(
         .cloned()
         .collect::<HashMap<_, _>>();
     let mut tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
+    // Client-filled values a layout can place anywhere; a value the pane reported wins.
+    tokens
+        .entry("agent_status".into())
+        .or_insert_with(|| sidebar_status_text(agent.agent_status).into());
+    if let Some(name) = agent.name.as_deref() {
+        tokens
+            .entry("agent_name".into())
+            .or_insert_with(|| name.into());
+    }
     let repo = mixed_repo_spaces
         .contains(workspace.workspace_id.as_str())
         .then(|| match pane.and_then(|pane| pane.git_context.as_ref()) {
@@ -1604,5 +1613,97 @@ fold_toggle_token = "$group"
         // Same line as without the heading: indent 1, spacer, icon, state.
         assert!(lines[3].starts_with(&format!(" {GAP} ")), "{lines:?}");
         assert!(lines[3].ends_with(" idle"), "{lines:?}");
+    }
+
+    /// One space of plain agent cards drawn with `rows_toml`; `edit` shapes each card.
+    fn token_space(
+        count: usize,
+        rows_toml: &str,
+        edit: impl Fn(usize, &mut crate::protocol::ClientShellAgent),
+    ) -> (ClientShellSnapshot, ClientShellConfig) {
+        let (mut snapshot, mut config) = repo_space(&vec![None; count]);
+        for (index, agent) in snapshot.agents.iter_mut().enumerate() {
+            edit(index, agent);
+        }
+        config.agents = toml::from_str(rows_toml).unwrap();
+        (snapshot, config)
+    }
+
+    #[test]
+    fn agent_status_token_is_the_bare_state_word_even_with_state_labels() {
+        let (snapshot, config) = token_space(1, r#"rows = [["$agent_status"]]"#, |_, agent| {
+            agent.agent_status = crate::api::schema::AgentStatus::Done;
+            agent.name = Some("sw-dotfiles-109".into());
+            agent.state_labels = vec![("done".into(), "done · sw-dotfiles-109".into())];
+        });
+        let lines = panel_lines(&snapshot, &config, None);
+        assert!(lines.iter().any(|line| line.trim() == "done"), "{lines:?}");
+        assert!(
+            !lines.iter().any(|line| line.contains("sw-dotfiles")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn agent_name_token_is_only_a_given_name() {
+        let (snapshot, config) = token_space(2, r#"rows = [["$agent_name"]]"#, |index, agent| {
+            if index == 0 {
+                agent.name = Some("wiki-astra".into());
+                agent.agent = Some("codex".into());
+            } else {
+                agent.agent = Some("claude".into());
+                agent.display_agent = Some("ready to approve · R#7 PR#377 · 3h ago".into());
+            }
+        });
+        let lines = panel_lines(&snapshot, &config, None);
+        assert!(
+            lines.iter().any(|line| line.trim() == "wiki-astra"),
+            "{lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("claude") || line.contains("ready to approve")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn pane_reported_agent_status_wins() {
+        let (snapshot, config) = token_space(1, r#"rows = [["$agent_status"]]"#, |_, agent| {
+            agent.tokens.push(("agent_status".into(), "custom".into()));
+        });
+        let lines = panel_lines(&snapshot, &config, None);
+        assert!(
+            lines.iter().any(|line| line.trim() == "custom"),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn folded_row_reads_like_the_design_sample() {
+        let rows = r#"
+rows = [["$group"]]
+folded_rows = [["$group"], ["state_icon", "$agent_status", "$task_needs_you", "$task_ready", "$task", "$task_title", "$agent_name", "terminal_title_stripped"]]
+fold_toggle_token = "$group"
+"#;
+        let (snapshot, config) = token_space(1, rows, |_, agent| {
+            agent.name = Some("sw-auto-teikeikun-53".into());
+            agent.terminal_title_stripped = Some("返信作業P3-6 送信結果の確定".into());
+            agent.tokens.push(("task_ready".into(), "TKN-53".into()));
+            agent.tokens.push((
+                "task_title".into(),
+                "返信作業の送信を確定 01: サーバーで結果を必ず決める".into(),
+            ));
+        });
+        let folds = HashMap::from([("ws_1".to_string(), true)]);
+        let lines = panel_lines(&snapshot, &config, Some(&folds));
+        let line = lines
+            .iter()
+            .find(|line| line.contains("TKN-53"))
+            .unwrap_or_else(|| panic!("{lines:?}"));
+        // Wide cells render with a filler space; tokens share the width, each cut on its own.
+        let packed = line.replace(' ', "");
+        assert!(packed.contains("○idle·TKN-53·返信"), "{line}");
     }
 }
